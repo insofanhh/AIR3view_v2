@@ -103,6 +103,41 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    pub fn load(path: &Path) -> Result<Self> {
+        let mut settings: Self = serde_json::from_slice(&fs::read(path)?)?;
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(root) = exe.parent() { settings.relocate_runtime(root); }
+        }
+        if let Some(python) = std::env::var_os("AIR3VIEW_PYTHON").map(PathBuf::from).filter(|p| p.is_file()) {
+            settings.python = python.to_string_lossy().into_owned();
+        }
+        Ok(settings)
+    }
+
+    fn relocate_runtime(&mut self, root: &Path) {
+        for (stored, suffix, command) in [
+            (&mut self.ffmpeg, "tools/ffmpeg.exe", "ffmpeg"),
+            (&mut self.ffprobe, "tools/ffprobe.exe", "ffprobe"),
+            (&mut self.ytdlp, "tools/yt-dlp.exe", "yt-dlp"),
+            (&mut self.youtube_node, "tools/node.exe", "node"),
+            (&mut self.rhubarb, "tools/rhubarb/rhubarb.exe", "rhubarb/rhubarb"),
+            (&mut self.python, ".venv/Scripts/python.exe", "python"),
+        ] {
+            let candidate = root.join(suffix);
+            if !candidate.is_file() { continue; }
+            let normalized = stored.replace('\\', "/");
+            let previous_root = normalized.to_ascii_lowercase().strip_suffix(&suffix.to_ascii_lowercase())
+                .map(|_| PathBuf::from(&normalized[..normalized.len() - suffix.len()]));
+            let managed = previous_root.is_some_and(|old| !Path::new(stored).is_file()
+                || old.join("release.json").is_file() || old.join("Cargo.toml").is_file());
+            if stored.is_empty() || normalized == command || normalized == format!("{command}.exe") || managed {
+                *stored = candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+}
+
 fn default_youtube_node() -> String {
     let bundled = default_tool("node");
     if bundled != "node" { return bundled; }
@@ -1081,6 +1116,34 @@ pub fn fit_budget(p: &mut Project) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn portable_update_rebinds_bundled_runtime_and_keeps_custom_tools() {
+        let temp = tempfile::tempdir().unwrap();
+        let previous = temp.path().join("previous release");
+        let current = temp.path().join("new release");
+        let custom = temp.path().join("custom");
+        for root in [&previous, &current, &custom] {
+            for suffix in ["tools/ffmpeg.exe", "tools/ffprobe.exe", ".venv/Scripts/python.exe"] {
+                let path = root.join(suffix);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, b"fixture").unwrap();
+            }
+        }
+        fs::write(previous.join("release.json"), b"{}").unwrap();
+        let mut settings = Settings { ffmpeg:previous.join("tools/ffmpeg.exe").to_string_lossy().into_owned(),
+            ffprobe:custom.join("tools/ffprobe.exe").to_string_lossy().into_owned(),
+            python:previous.join(".venv/Scripts/python.exe").to_string_lossy().into_owned(),
+            voice:"custom voice".into(), cli_path:"custom-cli".into(), ..Default::default() };
+        settings.relocate_runtime(&current);
+        assert_eq!(Path::new(&settings.ffmpeg), current.join("tools/ffmpeg.exe"));
+        assert_eq!(Path::new(&settings.python), current.join(".venv/Scripts/python.exe"));
+        assert_eq!(Path::new(&settings.ffprobe), custom.join("tools/ffprobe.exe"));
+        settings.python = temp.path().join("deleted release/.venv/Scripts/python.exe").to_string_lossy().into_owned();
+        settings.relocate_runtime(&current);
+        assert_eq!(Path::new(&settings.python), current.join(".venv/Scripts/python.exe"));
+        assert_eq!(settings.voice, "custom voice");
+        assert_eq!(settings.cli_path, "custom-cli");
+    }
     fn project() -> Project {
         let mut p = Project::default();
         p.rules.min_seconds = 1;

@@ -24,7 +24,7 @@ fn main() -> Result<()> {
         },
         Some("repair-script")=>{
             let settings_path=data_dir().join("settings.json");
-            let settings=if settings_path.is_file(){serde_json::from_slice(&fs::read(settings_path)?)?}else{s};
+            let settings=if settings_path.is_file(){Settings::load(&settings_path)?}else{s};
             let mut p=Project::load(Path::new(args.get(2).context("repair-script <project.json> <saved response>")?))?;
             let settings=reaction_studio::workflow::effective_settings(&p,&settings);
             let plan=reaction_studio::providers::repair_saved(&p,&settings,&cancel,Path::new(args.get(3).context("saved response")?))?;
@@ -33,14 +33,14 @@ fn main() -> Result<()> {
         },
         Some("prepare")=>{
             let settings_path=data_dir().join("settings.json");
-            let settings=if settings_path.is_file(){serde_json::from_slice(&fs::read(settings_path)?)?}else{s};
+            let settings=if settings_path.is_file(){Settings::load(&settings_path)?}else{s};
             let project=Project::load(Path::new(args.get(2).context("prepare <project.json>")?))?;
             let (tx,rx)=std::sync::mpsc::channel();let reporter=std::thread::spawn(move||while let Ok(e)=rx.recv(){if let pipeline::Event::Stage{lane,message,..}=e{println!("{lane}: {message}");}});
             let result=pipeline::prepare(project,settings,tx,cancel);let _=reporter.join();let p=result?;println!("OK: {} cảnh",p.segments.len());
         },
         Some("auto-run")|Some("auto-resume")|Some("speech")|Some("assets")|Some("captions")|Some("script-only")|Some("heygen-preflight")=>{
             let settings_path = data_dir().join("settings.json");
-            let settings: Settings = if settings_path.is_file() { serde_json::from_slice(&fs::read(settings_path)?)? } else { s };
+            let settings: Settings = if settings_path.is_file() { Settings::load(&settings_path)? } else { s };
             if args[1] == "heygen-preflight" {
                 reaction_studio::providers::heygen_preflight(&settings, &cancel)?;
                 println!("HeyGen preflight: PASS (auth; wallet > 0 nếu dùng wallet). Không tạo video.");
@@ -72,14 +72,14 @@ fn main() -> Result<()> {
         Some("doctor")=>println!("{}",reaction_studio::pipeline::diagnostics(&s)),
         Some("download")=>{
             let path=data_dir().join("settings.json");
-            let settings:Settings=if path.is_file(){serde_json::from_slice(&fs::read(path)?)?}else{s};
+            let settings:Settings=if path.is_file(){Settings::load(&path)?}else{s};
             let url=args.get(2).context("download <YouTube URL> <folder>")?;
             let folder=PathBuf::from(args.get(3).context("download <YouTube URL> <folder>")?);
             fs::create_dir_all(&folder)?;let folder=fs::canonicalize(folder)?;
             let source=media::download(&settings,url,&folder,"src_1".into(),&cancel)?;
             println!("{}",serde_json::json!({"path":source.path,"duration_ms":source.duration_ms,"width":source.width,"height":source.height,"audio":source.has_audio}));
         },
-        Some("render")=>{let p=Project::load(Path::new(args.get(2).context("render <project.json> <output.mp4>")?))?;let output=PathBuf::from(args.get(3).context("output.mp4")?);let settings_path=data_dir().join("settings.json");let globals=if settings_path.is_file(){serde_json::from_slice(&fs::read(settings_path)?)?}else{s};let effective=reaction_studio::workflow::effective_settings(&p,&globals);media::render(&p,&effective,&output,&cancel,|i,n|println!("Bước xuất {i}/{n}"))?;println!("OK {}",output.display());},
+        Some("render")=>{let p=Project::load(Path::new(args.get(2).context("render <project.json> <output.mp4>")?))?;let output=PathBuf::from(args.get(3).context("output.mp4")?);let settings_path=data_dir().join("settings.json");let globals=if settings_path.is_file(){Settings::load(&settings_path)?}else{s};let effective=reaction_studio::workflow::effective_settings(&p,&globals);media::render(&p,&effective,&output,&cancel,|i,n|println!("Bước xuất {i}/{n}"))?;println!("OK {}",output.display());},
         _=>println!("AIR3view CLI\n  doctor\n  download <YouTube URL> <folder>\n  prepare <project.json>\n  auto-run / auto-resume <project.json>\n  script-only / speech / assets / captions / evidence <project.json>\n  repair-script <project.json> <saved response>\n  render <project.json> <output.mp4>\n  metadata-inspect <input.mp4>\n  metadata-apply <project.json> <input.mp4> <new-output.mp4>\n  heygen-preflight"),
     }
     Ok(())

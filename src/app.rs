@@ -201,10 +201,7 @@ impl StudioApp {
         let root = data_dir();
         #[cfg(test)]
         let root = { let _ = root; std::env::temp_dir().join(format!("reaction-ui-{}", uuid::Uuid::new_v4())) };
-        let mut settings: Settings = fs::read(root.join("settings.json"))
-            .ok()
-            .and_then(|v| serde_json::from_slice(&v).ok())
-            .unwrap_or_default();
+        let mut settings = Settings::load(&root.join("settings.json")).unwrap_or_default();
         // Migrate a key accidentally pasted into the environment-name field into
         // the masked, in-memory editor. Save persists it to User environment only.
         let heygen_key_input = if !providers::is_environment_name(&settings.heygen_key_env) {
