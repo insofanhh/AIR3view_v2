@@ -45,6 +45,11 @@ jobs:
       - name: Verify packaged render
         shell: powershell
         run: ./scripts/verify-release.ps1 -PackagePath ./dist/AIR3view
+      - name: Verify fresh Python, real TTS and local avatar
+        shell: powershell
+        run: |
+          ./dist/AIR3view/scripts/setup-workers.ps1
+          ./scripts/verify-workers.ps1 -PackagePath ./dist/AIR3view
       - name: Publish release after verification
         shell: powershell
         run: |
