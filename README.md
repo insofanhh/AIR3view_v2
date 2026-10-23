@@ -54,7 +54,7 @@ Tác vụ có checkpoint. Sau lỗi/mở lại app, dùng **Tiếp tục bước
 
 ## Dữ liệu và log
 
-Dự án/cấu hình: `%LOCALAPPDATA%\ReactionStudio` (giữ tên cũ để tương thích). Log worker nằm trong `logs/vieneu-out.log`, `logs/vieneu-err.log`. Dự án chứa `project.json`, `workflow.json`, `logs/pipeline.jsonl`, media/cache. Xóa dự án qua nút trong Thư viện; dọn source/build không cần xóa AppData.
+Dự án/cấu hình: `%LOCALAPPDATA%\ReactionStudio` (giữ tên cũ để tương thích). Log worker nằm trong `logs/vieneu-out.log`, `logs/vieneu-err.log`. Cache model VieNeu dùng file thường trong `runtime/huggingface-regular-v1` để ONNX hoạt động cả khi Windows bật Developer Mode; có thể đổi bằng biến `REACTION_MODEL_CACHE`. Dự án chứa `project.json`, `workflow.json`, `logs/pipeline.jsonl`, media/cache. Xóa dự án qua nút trong Thư viện; dọn source/build không cần xóa AppData.
 
 ## Build và đóng gói
 

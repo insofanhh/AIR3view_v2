@@ -16,6 +16,15 @@ import threading
 from contextlib import asynccontextmanager
 from typing import Literal
 
+# ONNX external tensor files must stay beside their graphs. HF's symlink cache
+# resolves them into separate blob directories on Developer Mode/admin machines.
+# Use an app-owned, regular-file cache; do not relax ONNX path validation.
+_data_root = Path(os.environ.get("REACTION_DATA_DIR") or
+                  Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".cache"))) / "ReactionStudio")
+os.environ["HF_HUB_CACHE"] = str(Path(os.environ.get("REACTION_MODEL_CACHE") or
+                                   _data_root / "runtime" / "huggingface-regular-v1"))
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
+
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
