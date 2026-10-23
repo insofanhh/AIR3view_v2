@@ -32,7 +32,9 @@ $taskBatch=Join-Path $taskScratch 'batch.json'
 & $taskPython (Join-Path $taskPackage 'workers\transcribe.py') --batch $taskBatch --device $Device --model $Model --compute-type $ComputeType
 if($LASTEXITCODE -ne 0){throw 'Real ASR inference failed'}
 foreach($taskJob in $taskJobs){
-    $taskWords=@(Get-Content -LiteralPath $taskJob.output -Raw | ConvertFrom-Json)
+    # Windows PowerShell 5.1 returns a JSON array as one pipeline object;
+    # assignment preserves its array shape on both PowerShell 5.1 and 7.
+    $taskWords=Get-Content -LiteralPath $taskJob.output -Raw | ConvertFrom-Json
     if($taskWords.Count -lt 8){throw 'ASR did not recognize sufficient words'}
     $taskText=($taskWords | ForEach-Object text) -join ' '
     foreach($taskExpected in $taskExpectedWords){if($taskText -notmatch $taskExpected){throw ('Missing expected speech content: '+$taskExpected+' in '+$taskText)}}
