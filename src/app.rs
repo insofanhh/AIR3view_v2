@@ -1941,20 +1941,58 @@ impl StudioApp {
             });
         });
     }
+    fn asr_settings(&mut self, ui: &mut egui::Ui) {
+        panel().show(ui, |ui| {
+            heading(ui, "NHẬN DẠNG TIẾNG NÓI / WHISPER");
+            field(ui, "Ngôn ngữ nguồn (trống = tự nhận diện)", &mut self.settings.asr_language);
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Model");
+                egui::ComboBox::from_id_salt("asr_model_setting").selected_text(&self.settings.asr_model).show_ui(ui, |ui| {
+                    for (value,label) in [("base","base • tiết kiệm RAM"),("small","small • cân bằng"),("large-v3-turbo","large-v3-turbo • chất lượng cao")] {
+                        ui.selectable_value(&mut self.settings.asr_model, value.into(), label);
+                    }
+                });
+                ui.label("Thiết bị");
+                egui::ComboBox::from_id_salt("asr_device").selected_text(if self.settings.asr_device=="cuda" {"CUDA / NVIDIA"} else {"CPU"}).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.settings.asr_device, "cpu".into(), "CPU");
+                    ui.selectable_value(&mut self.settings.asr_device, "cuda".into(), "CUDA / NVIDIA");
+                });
+                ui.label("Kiểu tính toán");
+                egui::ComboBox::from_id_salt("asr_compute").selected_text(if self.settings.asr_compute_type=="auto" {"Tự động / INT8"} else {&self.settings.asr_compute_type}).show_ui(ui, |ui| {
+                    for (value,label) in [("auto","Tự động • ưu tiên INT8 ít VRAM"),("int8_float16","INT8 / FP16 • CUDA"),("float16","FP16 • CUDA"),("int8_float32","INT8 / FP32"),("float32","FP32 • tốn bộ nhớ")] {
+                        ui.selectable_value(&mut self.settings.asr_compute_type, value.into(), label);
+                    }
+                });
+            });
+            ui.label(RichText::new("CUDA: GPU NVIDIA, driver hỗ trợ CUDA 12.8+ (572.61+). Lần đầu tự tải cuBLAS ~568 MB; không cần CUDA Toolkit. large-v3-turbo tải thêm ~1,6 GB. Chọn Tự động để giảm VRAM; thiết lập dùng chung cho transcript và căn phụ đề.").size(12.0).color(MUTED));
+            ui.horizontal_wrapped(|ui| {
+                for (install,label) in [(false,"Kiểm tra CUDA"),(true,"Chuẩn bị CUDA")] {
+                    let response=ui.add_enabled(!self.busy,egui::Button::new(label).min_size(Vec2::new(155.0,34.0)));
+                    #[cfg(test)]
+                    self.hitboxes.insert(if install {"cuda_setup"} else {"cuda_check"}.into(),response.rect);
+                    if response.clicked() {
+                        self.busy=true; self.cancel=process::cancel_token();
+                        let settings=self.settings.clone(); let cancel=self.cancel.clone(); let tx=self.tx.clone();
+                        self.message(if install {"Đang chuẩn bị CUDA; theo dõi nhật ký tác vụ."} else {"Đang kiểm tra GPU và thư viện CUDA…"},false);
+                        thread::spawn(move || {
+                            let event=match crate::asr::cuda_check(&settings,install,&cancel) {
+                                Ok(message)=>{let _=tx.send(Event::Log(message.clone())); Event::Done(message)},
+                                Err(error)=>Event::Error(format!("{error:#}")),
+                            };
+                            let _=tx.send(event);
+                        });
+                    }
+                }
+            });
+        });
+        ui.add_space(12.0);
+    }
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical().show(ui,|ui|{ui.add_enabled_ui(!self.busy,|ui|{
         self.youtube_cookie_settings(ui);
         ui.add_space(12.0);
-        field(ui,"Ngôn ngữ nguồn ASR (trống = tự nhận diện)",&mut self.settings.asr_language);
-        ui.horizontal_wrapped(|ui|{
-            ui.label("Model ASR / Whisper");
-            egui::ComboBox::from_id_salt("asr_model_setting").selected_text(&self.settings.asr_model).show_ui(ui,|ui|{
-                for (value,label) in [("base","base • tiết kiệm RAM"),("small","small • cân bằng"),("large-v3-turbo","large-v3-turbo • chất lượng cao")]{
-                    ui.selectable_value(&mut self.settings.asr_model,value.into(),label);
-                }
-            });
-        });
-        ui.columns(2,|cols|{panel().show(&mut cols[0],|ui|{heading(ui,"GEMINI / ANTIGRAVITY");ui.horizontal(|ui|{ui.selectable_value(&mut self.settings.provider,"antigravity".into(),"Antigravity CLI");ui.selectable_value(&mut self.settings.provider,"gemini".into(),"Gemini API");});if self.settings.provider=="antigravity"{egui::ComboBox::from_id_salt("analysis_input").selected_text(match self.settings.analysis_input.as_str(){"local"=>"Transcript + ảnh","url"=>"Chỉ URL trực tiếp",_=>"Tự động: URL → fallback local"}).show_ui(ui,|ui|{ui.selectable_value(&mut self.settings.analysis_input,"auto".into(),"Tự động: thử URL cùng lúc tải");ui.selectable_value(&mut self.settings.analysis_input,"url".into(),"Chỉ URL trực tiếp (dừng nếu không đọc được)");ui.selectable_value(&mut self.settings.analysis_input,"local".into(),"Transcript + ảnh sau tải");});field(ui,"Model CLI",&mut self.settings.cli_model);field(ui,"CLI executable / node.exe",&mut self.settings.cli_path);field(ui,"CLI argv (JSON array)",&mut self.cli_args_text);ui.label(RichText::new("URL được gửi ngay cùng lúc tải video; chế độ Tự động chuyển sang bằng chứng local nếu CLI không đọc được URL.").size(12.0).color(MUTED));ui.add(egui::Slider::new(&mut self.settings.visual_sample_seconds,1..=10).text("Giây / ảnh"));field(ui,"Model Whisper",&mut self.settings.asr_model);egui::ComboBox::from_id_salt("asr_device").selected_text(&self.settings.asr_device).show_ui(ui,|ui|{ui.selectable_value(&mut self.settings.asr_device,"cpu".into(),"CPU / int8");ui.selectable_value(&mut self.settings.asr_device,"cuda".into(),"CUDA / float16");});}else{field(ui,"Model Gemini API",&mut self.settings.gemini_model);field(ui,"Gemini API base",&mut self.settings.gemini_base);field(ui,"Tên biến môi trường API key",&mut self.settings.gemini_key_env);}
+        self.asr_settings(ui);
+        ui.columns(2,|cols|{panel().show(&mut cols[0],|ui|{heading(ui,"GEMINI / ANTIGRAVITY");ui.horizontal(|ui|{ui.selectable_value(&mut self.settings.provider,"antigravity".into(),"Antigravity CLI");ui.selectable_value(&mut self.settings.provider,"gemini".into(),"Gemini API");});if self.settings.provider=="antigravity"{egui::ComboBox::from_id_salt("analysis_input").selected_text(match self.settings.analysis_input.as_str(){"local"=>"Transcript + ảnh","url"=>"Chỉ URL trực tiếp",_=>"Tự động: URL → fallback local"}).show_ui(ui,|ui|{ui.selectable_value(&mut self.settings.analysis_input,"auto".into(),"Tự động: thử URL cùng lúc tải");ui.selectable_value(&mut self.settings.analysis_input,"url".into(),"Chỉ URL trực tiếp (dừng nếu không đọc được)");ui.selectable_value(&mut self.settings.analysis_input,"local".into(),"Transcript + ảnh sau tải");});field(ui,"Model CLI",&mut self.settings.cli_model);field(ui,"CLI executable / node.exe",&mut self.settings.cli_path);field(ui,"CLI argv (JSON array)",&mut self.cli_args_text);ui.label(RichText::new("URL được gửi ngay cùng lúc tải video; chế độ Tự động chuyển sang bằng chứng local nếu CLI không đọc được URL.").size(12.0).color(MUTED));ui.add(egui::Slider::new(&mut self.settings.visual_sample_seconds,1..=10).text("Giây / ảnh"));}else{field(ui,"Model Gemini API",&mut self.settings.gemini_model);field(ui,"Gemini API base",&mut self.settings.gemini_base);field(ui,"Tên biến môi trường API key",&mut self.settings.gemini_key_env);}
             ui.add_space(16.0);self.voice_settings(ui);});
             panel().show(&mut cols[1],|ui|{self.avatar_settings(ui);ui.add_space(12.0);heading(ui,"MEDIA TOOLS");field(ui,"FFmpeg",&mut self.settings.ffmpeg);field(ui,"ffprobe",&mut self.settings.ffprobe);field(ui,"yt-dlp",&mut self.settings.ytdlp);field(ui,"Python cho ASR",&mut self.settings.python);egui::ComboBox::from_id_salt("encoder").selected_text(&self.settings.encoder).show_ui(ui,|ui|{for e in["libx264","h264_nvenc","h264_qsv"]{ui.selectable_value(&mut self.settings.encoder,e.to_string(),e);}});});});
         ui.add_space(14.0);ui.horizontal(|ui|{if primary(ui,"Lưu cấu hình").clicked(){match self.save_settings(){Ok(())=>self.message("Đã lưu cấu hình",false),Err(e)=>self.message(format!("{e:#}"),true)}}
@@ -2124,6 +2162,23 @@ impl eframe::App for StudioApp {
 #[cfg(test)]
 mod ui_tests {
     use super::*;
+    #[test]
+    fn asr_controls_fit_and_are_available_for_both_providers() {
+        for provider in ["antigravity", "gemini"] {
+            for width in [760.,1080.,1440.] {
+                let ctx=egui::Context::default(); let mut app=StudioApp::from_context(&ctx);
+                app.settings.provider=provider.into(); app.settings.asr_device="cuda".into();
+                app.settings.asr_model="large-v3-turbo".into();
+                let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width,800.));
+                for _ in 0..3 {let _=ctx.run(egui::RawInput{screen_rect:Some(screen),..Default::default()},|ctx|{
+                    egui::CentralPanel::default().show(ctx,|ui| app.asr_settings(ui));
+                });}
+                let check=app.hitboxes["cuda_check"]; let setup=app.hitboxes["cuda_setup"];
+                assert!(screen.contains_rect(check) && screen.contains_rect(setup));
+                assert!(!check.intersects(setup)); assert!((check.height()-setup.height()).abs()<1.);
+            }
+        }
+    }
     #[test]
     fn cookie_controls_fit_settings_and_clear_without_deleting_selected_file() {
         for (width,height) in [(1080.,720.),(1440.,900.)] {

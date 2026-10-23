@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod asr;
 pub mod app;
 pub mod branding;
 pub mod cartoon;

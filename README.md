@@ -1,6 +1,6 @@
 # AIR3view
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.1. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.2. Preview, timeline và các layer nằm ngay trong app.
 
 ## Khởi chạy
 
@@ -33,6 +33,28 @@ App dùng lại VieNeu đang chạy nếu API hỗ trợ giọng tham chiếu v�
 - Giọng: VieNeu tại `http://127.0.0.1:8765`, model `pnnbao-ump/VieNeu-TTS-v3-Turbo`, có preset và audio tham chiếu. Kịch bản hỗ trợ Tiếng Việt/English; cấu hình giọng cần phù hợp với ngôn ngữ và runtime.
 - Nhân vật: 2D local dùng Rhubarb + Pillow hoặc HeyGen Avatar IV qua `HEYGEN_API_KEY`. Nhánh HeyGen đã có kiểm thử hợp đồng bằng giả lập; cần key/số dư để kiểm tra dịch vụ thực tế.
 - YouTube: chọn cookie Netscape `.txt` trong Cài đặt kết nối khi nguồn yêu cầu đăng nhập. Cookie phải còn hiệu lực và tài khoản có quyền xem; chỉ truyền khi tải, không gửi cho AI.
+
+## Whisper: CPU / CUDA và large-v3-turbo
+
+Trong **Cài đặt kết nối → Nhận dạng tiếng nói / Whisper**, chọn model `base`, `small` hoặc `large-v3-turbo`, rồi chọn **CPU** hoặc **CUDA / NVIDIA**. Dùng chung cho phân tích transcript và căn từ phụ đề, với cả Gemini và Antigravity. **Lưu cấu hình** sau khi chọn.
+
+- **CPU:** không tải CUDA; Tự động dùng INT8. `large-v3-turbo` chạy trên CPU nhưng chậm hơn GPU và cần đủ RAM.
+- **CUDA:** cần Windows x64, GPU NVIDIA và driver hỗ trợ CUDA **12.8 trở lên** (Windows **572.61+**). GPU không tương thích hoặc driver cũ sẽ được báo trước khi tải model/thư viện. Bấm **Kiểm tra CUDA** để kiểm tra driver, GPU, nạp cuBLAS và các kiểu tính toán thực tế.
+- **Chuẩn bị CUDA:** tự tải wheel cuBLAS **12.8.4.1** chính thức từ NVIDIA/PyPI, kiểm SHA256 và cài riêng trong `<dữ liệu AIR3view>/runtime/asr-cuda12-v1`. Lần chạy CUDA đầu cũng tự chuẩn bị nếu thiếu. Cần mạng, ít nhất **4 GB trống** để cài thư viện, cộng thêm khoảng **1,6 GB** nếu chưa có model. Có thể hủy và thử lại. Không cần cài CUDA Toolkit hay sửa PATH hệ thống.
+- Backend khóa **CTranslate2 4.8.3**; wheel Windows phiên bản này dùng Conv1D CUDA trực tiếp, không cần tải cuDNN. Không đổi backend tùy ý theo hướng dẫn cuDNN của các phiên bản khác.
+- **Tự động** ưu tiên `int8_float16` trên GPU hỗ trợ, giảm VRAM so với FP16. Có thể chọn FP16 thủ công khi đủ VRAM. Nếu thiếu VRAM, app báo rõ và giữ nguyên thiết bị đã chọn, không tự chạy CPU âm thầm. GPU 4 GB cần đóng ứng dụng GPU khác và kiểm tra với video thực tế.
+- Mỗi transcript mới có file `*.asr.json` cạnh file từ, ghi thiết bị, model, kiểu tính toán thực tế và thời gian; transcript đã cache được dùng lại. Nút kiểm tra CUDA chỉ kiểm tra runtime, không thay thế kiểm thử nhận dạng model.
+
+Bản 0.2.2 đã kiểm thử nhận dạng thật với `large-v3-turbo` trên GTX 1650 Max-Q 4 GB, driver 621.01: CUDA INT8-FP16 và FP16, batch tiếng Anh chọn sẵn/tự nhận diện, cùng audio tiếng Việt. Trên máy này nên chọn **Tự động / INT8**; thời gian và VRAM thực tế thay đổi theo video và ứng dụng đang chạy.
+
+Kiểm thử nhận dạng thật trong thư mục source đã chuẩn bị Python (có thể truyền thư mục gói vào `-PackagePath`):
+
+```powershell
+.\scripts\verify-asr.ps1 -PackagePath . -Device cpu -Model large-v3-turbo
+.\scripts\verify-asr.ps1 -PackagePath . -Device cuda -Model large-v3-turbo
+```
+
+Script tạo audio tiếng Anh thật, nhận dạng batch với ngôn ngữ cố định/tự động và xác minh nội dung, timestamp, model, thiết bị. CI Windows thông thường chỉ kiểm thử CPU; kiểm thử CUDA phải chạy trên GPU NVIDIA thật trước khi công bố hỗ trợ GPU đã được xác minh.
 
 ## Workflow
 
@@ -71,8 +93,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1 -SkipB
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-source.ps1
 ```
 
-- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.1-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
-- Source sạch: `dist/AIR3view-0.2.1-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
+- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.2-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
+- Source sạch: `dist/AIR3view-0.2.2-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
 - Package dùng danh sách runtime và ghi SHA256 trong `package-manifest.json`. Không sinh bản EXE dự phòng. Có file lạ ở thư mục đích thì script báo lỗi để tránh đưa nhầm vào release.
 - Giữ `Cargo.lock`. Unit test nằm trong module Rust, chỉ biên dịch khi chạy `scripts/build.cmd test --release --lib --locked`; không nằm trong EXE release.
 - `.gitignore` loại build/dist/runtime/dữ liệu local. Không commit key, cookie hay cấu hình cá nhân.

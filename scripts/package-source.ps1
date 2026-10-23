@@ -9,7 +9,7 @@ foreach ($taskName in @('.gitignore', '.gitattributes', 'Cargo.toml', 'Cargo.loc
 foreach ($taskFolder in @('src', 'assets', 'resources', 'scripts', '.github', '.cargo')) {
     $taskFiles += Get-ChildItem -LiteralPath (Join-Path $taskRoot $taskFolder) -File -Recurse
 }
-foreach ($taskName in @('vieneu_server.py', 'transcribe.py', 'cartoon_render.py', 'gesture_rig.py',
+foreach ($taskName in @('vieneu_server.py', 'transcribe.py', 'cuda_runtime.py', 'requirements-cuda.txt', 'cartoon_render.py', 'gesture_rig.py',
     'requirements.txt', 'requirements.lock', 'PORTRAIT_ASSET.md', 'portrait-base.png', 'cartoon-portrait.png', 'cartoon-studio.png', 'cartoon-analyst.png')) {
     $taskFiles += Get-Item -LiteralPath (Join-Path $taskRoot ('workers\' + $taskName))
 }

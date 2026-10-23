@@ -790,6 +790,8 @@ pub fn transcribe(
             s.asr_model.clone(),
             "--device".into(),
             s.asr_device.clone(),
+            "--compute-type".into(),
+            s.asr_compute_type.clone(),
         ];
         process::run(
             &s.python,
@@ -801,6 +803,7 @@ pub fn transcribe(
         )?;
     }
     for (i, output) in outputs.iter().enumerate() {
+        if let Some(summary) = crate::asr::summary(output) { let _ = tx.send(Event::Log(summary)); }
         let words: Vec<Word> = serde_json::from_slice(&fs::read(output)?)?;
         anyhow::ensure!(
             words

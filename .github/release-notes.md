@@ -1,3 +1,12 @@
+## AIR3view 0.2.2: Whisper CUDA và large-v3-turbo
+
+- Chọn model **large-v3-turbo** cùng **CPU** hoặc **CUDA / NVIDIA** ở phần Whisper chung cho Gemini/Antigravity và căn phụ đề.
+- Thêm **Kiểm tra CUDA / Chuẩn bị CUDA**, tải thư viện NVIDIA chính thức có kiểm SHA256 vào thư mục dữ liệu riêng. Không cần cài CUDA Toolkit hoặc chép DLL thủ công.
+- CUDA cần driver NVIDIA hỗ trợ **CUDA 12.8+** (Windows **572.61+**). Tự động ưu tiên INT8 để giảm VRAM; có FP16 và các kiểu tính toán thủ công. Lỗi driver, thư viện hoặc thiếu VRAM được báo rõ; không tự chuyển sang CPU âm thầm.
+- Transcript mới kèm báo cáo model, thiết bị, kiểu tính toán thực tế và thời gian. Dùng lại transcript đã cache, giữ dữ liệu dự án cũ.
+- Bổ sung kiểm thử nhận dạng batch thật, tự nhận diện ngôn ngữ và timestamp trước khi phát hành.
+- Đã kiểm thử GPU thật trên GTX 1650 Max-Q 4 GB / driver 621.01: `large-v3-turbo` chạy CUDA với INT8-FP16 và FP16, tiếng Anh chọn sẵn/tự nhận diện, cùng audio tiếng Việt. Khuyến nghị **Tự động / INT8** trên GPU 4 GB.
+
 ## Tải và chạy trên Windows 10/11 x64
 
 1. Tải **AIR3view-…-windows-x64.zip** và giải nén toàn bộ vào thư mục có quyền ghi.

@@ -63,6 +63,12 @@ jobs:
           }
           Write-Host 'Native EXE bootstrap PASS: managed Python, worker health, shortcuts and lifecycle.'
           ./scripts/verify-workers.ps1 -PackagePath ./dist/AIR3view
+      - name: Verify real Whisper CPU batch, auto language and timestamps
+        shell: powershell
+        run: |
+          ./dist/AIR3view/.venv/Scripts/python.exe ./scripts/verify-asr-runtime.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/verify-asr.ps1 -PackagePath ./dist/AIR3view -Device cpu -Model base -UpstreamAudio
       - name: Publish release after verification
         shell: powershell
         run: |

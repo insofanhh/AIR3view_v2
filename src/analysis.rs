@@ -80,7 +80,7 @@ pub fn prepare<F: FnMut(&str)>(
                 }
             }
         }
-        progress(&format!("{}: nhận dạng tiếng nói", source.id));
+        progress(&format!("{}: nhận dạng tiếng nói • {} / {} / {}", source.id, s.asr_model, s.asr_device, s.asr_compute_type));
         let transcript = folder.join("words.json");
         if !transcript.is_file() {
             if source.has_audio {
@@ -118,6 +118,8 @@ pub fn prepare<F: FnMut(&str)>(
                     s.asr_model.clone(),
                     "--device".into(),
                     s.asr_device.clone(),
+                    "--compute-type".into(),
+                    s.asr_compute_type.clone(),
                 ];
                 process::run(
                     &s.python,
@@ -129,10 +131,13 @@ pub fn prepare<F: FnMut(&str)>(
                 )
                 .map_err(|error| {
                     let message=format!("{error:#}").to_lowercase();
-                    if ["mkl_malloc","memoryerror","out of memory","failed to allocate memory"].iter().any(|v|message.contains(v)) {
+                    if s.asr_device == "cuda" {
+                        error.context("Whisper CUDA thất bại. Mở Cài đặt kết nối → Kiểm tra CUDA; chi tiết bên dưới. Video đã tải được giữ lại.")
+                    } else if ["mkl_malloc","memoryerror","out of memory","failed to allocate memory"].iter().any(|v|message.contains(v)) {
                         error.context("Whisper thiếu RAM. Chọn model ASR base trong Cài đặt kết nối, lưu cấu hình rồi Tiếp tục / sửa phần lỗi; video đã tải được giữ lại.")
                     }else{error.context("Không tạo được transcript. Kiểm tra Python worker và model Whisper.")}
                 })?;
+                if let Some(summary) = crate::asr::summary(&transcript) { progress(&summary); }
                 let _ = fs::remove_file(audio);
             } else {
                 write_json(&transcript, &Vec::<Word>::new())?;

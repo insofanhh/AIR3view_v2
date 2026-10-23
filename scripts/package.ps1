@@ -17,7 +17,7 @@ $taskFiles = [ordered]@{
 }
 foreach ($taskFile in @('Start-AIR3view.cmd', 'Setup-AIR3view.cmd', 'README.md', 'THIRD_PARTY_NOTICES.md', 'WHATLANG-LICENSE.txt',
     'scripts\start-worker.ps1', 'scripts\setup-workers.ps1', 'scripts\create-shortcuts.ps1',
-    'workers\vieneu_server.py', 'workers\transcribe.py', 'workers\cartoon_render.py', 'workers\gesture_rig.py',
+    'workers\vieneu_server.py', 'workers\transcribe.py', 'workers\cuda_runtime.py', 'workers\requirements-cuda.txt', 'workers\cartoon_render.py', 'workers\gesture_rig.py',
     'workers\requirements.txt', 'workers\requirements.lock', 'workers\PORTRAIT_ASSET.md',
     'workers\portrait-base.png', 'workers\cartoon-portrait.png', 'workers\cartoon-studio.png', 'workers\cartoon-analyst.png')) {
     $taskFiles[$taskFile] = $taskFile

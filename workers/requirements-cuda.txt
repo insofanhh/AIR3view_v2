@@ -1,0 +1,5 @@
+# Optional private runtime for the pinned CTranslate2 4.8.3 Windows wheel.
+# That wheel builds Conv1D with WITH_CUDNN=OFF: cuDNN is not needed.
+# Official NVIDIA PyPI wheel; avoid modifying the CPU/VieNeu environment.
+nvidia-cublas-cu12==12.8.4.1 ; sys_platform == "win32" \
+    --hash=sha256:47e9b82132fa8d2b4944e708049229601448aaad7e6f296f630f2d1a32de35af
