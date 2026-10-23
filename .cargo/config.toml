@@ -1,0 +1,6 @@
+[build]
+target = "x86_64-pc-windows-msvc"
+
+[target.x86_64-pc-windows-msvc]
+# Ship an EXE that does not require a separately installed MSVC runtime.
+rustflags = ["-C", "target-feature=+crt-static"]

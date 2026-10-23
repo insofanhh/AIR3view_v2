@@ -1,0 +1,7 @@
+fastapi>=0.115,<1
+uvicorn>=0.34,<1
+vieneu==3.7.1
+faster-whisper==1.2.1
+# PyAV 19 removed metadata_errors, still used by faster-whisper 1.2.1.
+av==18.1.0
+pillow>=12,<13

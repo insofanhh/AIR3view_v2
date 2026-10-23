@@ -1,0 +1,21 @@
+{
+  "ffmpeg": {
+    "sha256": "4d2060a8b34a940aa47d785142055bb92a63053781e55f2ace4546edd519a8f5",
+    "url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-full_build-shared.7z",
+    "probe_sha256": "B1A495A71491BF208F95043CA06654AD76D59738533EC8FF237A759E29ABD2A3"
+  },
+  "ytdlp": {
+    "sha256": "33121D192D706E62F684A06F80918E3F3A8BA52AC3A65213B6951C39C7D9F555",
+    "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.10.21/yt-dlp.exe"
+  },
+  "uv": {
+    "sha256": "a38b8d1902b7cfbc76b423ba1bb456f623f42064cdc72628b6075b89afd1019a",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.13.5/uv-x86_64-pc-windows-msvc.zip",
+    "probe_sha256": "F45D1CB9D9140CA6D3F4005FDFC0EBECCF849FD04D1DC85804155CB923F1597B"
+  },
+  "node": {
+    "sha256": "cbc74b5e0982c9dbb41525fd8fb5dcd32fbee237863f7829072f4639a1ce5f20",
+    "url": "https://nodejs.org/dist/v22.23.4/node-v22.23.4-win-x64.zip",
+    "probe_sha256": "DCCC52DE28D8DF2EE22D2062424F8C563070D95D8AD70C54C4BF01D590DEC14F"
+  }
+}
