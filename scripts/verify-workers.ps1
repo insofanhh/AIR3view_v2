@@ -24,7 +24,8 @@ try {
     if ($taskHealth.worker_sha256 -ne $taskExpectedHash) { throw 'Verification reached a different worker' }
     $taskHeaders=@{}
     if ($env:VIENEU_API_KEY) { $taskHeaders.Authorization='Bearer ' + $env:VIENEU_API_KEY }
-    $taskBody=@{input='Xin chào, đây là video review của AIR3view.';voice='Minh Quân';language='vi'} | ConvertTo-Json
+    # ASCII source keeps this check valid on Windows PowerShell 5.1 code pages.
+    $taskBody='{"input":"Xin ch\u00e0o, \u0111\u00e2y l\u00e0 video review c\u1ee7a AIR3view.","voice":"Minh Qu\u00e2n","language":"vi"}'
     $taskWav=Join-Path $taskScratch 'voice.wav'
     Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:18765/v1/audio/speech' -Method Post -Headers $taskHeaders -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($taskBody)) -OutFile $taskWav -TimeoutSec 180
     $taskFfprobe=Join-Path $taskPackage 'tools\ffprobe.exe'
@@ -34,7 +35,7 @@ try {
     & (Join-Path $taskPackage 'tools\rhubarb\rhubarb.exe') -r phonetic -f json -o $taskCues $taskWav
     if ($LASTEXITCODE -ne 0) { throw 'Packaged Rhubarb failed' }
     $taskAvatar=Join-Path $taskScratch 'avatar.mkv'
-    $taskJob=@{cues=$taskCues;output=$taskAvatar;ffmpeg=(Join-Path $taskPackage 'tools\ffmpeg.exe');duration_ms=[math]::Round([double]$taskDuration*1000);fps=25;size=512;character='portrait';emotion='curious';gesture='auto';narration='Xin chào, đây là video review của AIR3view.';words=@()}
+    $taskJob=@{cues=$taskCues;output=$taskAvatar;ffmpeg=(Join-Path $taskPackage 'tools\ffmpeg.exe');duration_ms=[math]::Round([double]$taskDuration*1000);fps=25;size=512;character='portrait';emotion='curious';gesture='auto';narration='AIR3view local avatar verification';words=@()}
     $taskJobPath=Join-Path $taskScratch 'avatar.json'
     [IO.File]::WriteAllText($taskJobPath,($taskJob | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
     & $taskPython (Join-Path $taskPackage 'workers\cartoon_render.py') --job $taskJobPath
