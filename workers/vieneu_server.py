@@ -9,6 +9,7 @@ import base64
 import binascii
 import os
 import hashlib
+import sys
 from pathlib import Path
 import tempfile
 import threading
@@ -54,7 +55,7 @@ class Speech(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ready", "model": "pnnbao-ump/VieNeu-TTS-v3-Turbo", "reference_audio": True, "languages": ["vi", "en"], "protocol": 3, "worker_sha256": _worker_sha256}
+    return {"status": "ready", "model": "pnnbao-ump/VieNeu-TTS-v3-Turbo", "reference_audio": True, "languages": ["vi", "en"], "protocol": 3, "worker_sha256": _worker_sha256, "app": "AIR3view", "pid": os.getpid(), "python": sys.executable}
 
 
 @app.get("/v1/voices")

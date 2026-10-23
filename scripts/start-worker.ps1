@@ -24,11 +24,17 @@ try {
     $taskParent = Get-CimInstance Win32_Process -Filter "ProcessId=$($taskBackend.ParentProcessId)"
     $taskKnownPython = [IO.Path]::GetFullPath($taskPython)
     $taskWorkerSuffix = 'workers[\\/]vieneu_server\.py'
+    # A release may use a different virtualenv. A persistent worker identifies its
+    # own PID/interpreter, then OS process metadata independently confirms both.
+    $taskPreviousInstall = $taskHealth.app -eq 'AIR3view' -and $taskHealth.pid -eq $taskOwner -and
+        $taskHealth.python -and ($taskParent.ExecutablePath -eq $taskHealth.python -or $taskBackend.ExecutablePath -eq $taskHealth.python)
     if ($taskBackend.CommandLine -notmatch $taskWorkerSuffix -or
-        ($taskParent.ExecutablePath -ne $taskKnownPython -and $taskBackend.ExecutablePath -ne $taskKnownPython)) {
+        (-not $taskPreviousInstall -and $taskParent.ExecutablePath -ne $taskKnownPython -and $taskBackend.ExecutablePath -ne $taskKnownPython)) {
         throw 'Old VieNeu worker detected. Close that worker, then start this app again.'
     }
     Stop-Process -Id $taskOwner -ErrorAction Stop
+    $taskExiting = Get-Process -Id $taskOwner -ErrorAction SilentlyContinue
+    if ($taskExiting -and -not $taskExiting.WaitForExit(5000)) { throw 'Previous worker is still stopping. Retry in a moment.' }
     Write-Host 'Upgrading the AIR3view VieNeu worker.'
 } catch {
     if ($taskHealth -or $_.Exception.Message -eq 'Port 8765 belongs to another service.') { throw }
