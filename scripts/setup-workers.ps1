@@ -21,7 +21,8 @@ if (-not (Test-Path -LiteralPath $taskPython)) {
 Write-Host 'Installing the pinned AIR3view worker dependencies. Please keep this window open.'
 & $taskUv pip install --no-config --python $taskPython -r $taskRequirements
 if ($LASTEXITCODE -ne 0) { throw 'Worker dependency installation failed. Retry setup to continue.' }
-& $taskPython -c 'from vieneu import Vieneu; import faster_whisper, fastapi, uvicorn, PIL, soundfile; print("Worker imports: PASS")'
+& $taskPython -c 'from vieneu import Vieneu; import faster_whisper, fastapi, uvicorn, PIL, soundfile'
 if ($LASTEXITCODE -ne 0) { throw 'Worker runtime import check failed' }
+Write-Host 'Worker imports: PASS'
 Set-Content -LiteralPath $taskMarker -Value $taskHash -Encoding ASCII
 Write-Host 'Runtime ready. Voice and transcription models download separately on first use.'
