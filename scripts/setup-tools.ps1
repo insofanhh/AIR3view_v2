@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskTools = Join-Path $taskRoot 'tools'
