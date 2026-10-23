@@ -1,8 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use reaction_studio::app::StudioApp;
+use reaction_studio::startup::Launcher;
 
 fn main() -> eframe::Result<()> {
+    if let Some(report) = std::env::args().find_map(|arg| arg.strip_prefix("--verify-startup=").map(std::path::PathBuf::from)) {
+        let result = reaction_studio::startup::verify_runtime(&report);
+        std::process::exit(if result.is_ok() { 0 } else { 1 });
+    }
     let window_size = std::env::args()
         .find_map(|arg| {
             let value = arg.strip_prefix("--window-size=")?;
@@ -22,6 +26,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         reaction_studio::branding::APP_NAME,
         options,
-        Box::new(|cc| Ok(Box::new(StudioApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(Launcher::new(cc)))),
     )
 }

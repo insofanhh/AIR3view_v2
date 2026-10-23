@@ -1,4 +1,4 @@
-param([switch]$SkipBuild, [switch]$Archive, [string]$ReleaseTag)
+param([switch]$SkipBuild, [switch]$Archive, [string]$ReleaseTag, [string]$OutputPath)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
 $taskVersion = ((Get-Content -LiteralPath (Join-Path $taskRoot 'Cargo.toml') | Where-Object { $_ -match '^version\s*=' } | Select-Object -First 1) -split '"')[1]
@@ -8,7 +8,7 @@ if (-not $SkipBuild) {
     & (Join-Path $PSScriptRoot 'build.cmd') build --release --bins --locked
     if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
 }
-$taskDist = Join-Path $taskRoot 'dist\AIR3view'
+$taskDist = if ($OutputPath) { [IO.Path]::GetFullPath($OutputPath) } else { Join-Path $taskRoot 'dist\AIR3view' }
 New-Item -ItemType Directory -Force -Path $taskDist | Out-Null
 if ((Get-Item -LiteralPath $taskDist).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package destination cannot be a link' }
 $taskFiles = [ordered]@{
@@ -16,7 +16,7 @@ $taskFiles = [ordered]@{
     'target\x86_64-pc-windows-msvc\release\studio-cli.exe' = 'studio-cli.exe'
 }
 foreach ($taskFile in @('Start-AIR3view.cmd', 'Setup-AIR3view.cmd', 'README.md', 'THIRD_PARTY_NOTICES.md', 'WHATLANG-LICENSE.txt',
-    'scripts\start-worker.ps1', 'scripts\setup-workers.ps1',
+    'scripts\start-worker.ps1', 'scripts\setup-workers.ps1', 'scripts\create-shortcuts.ps1',
     'workers\vieneu_server.py', 'workers\transcribe.py', 'workers\cartoon_render.py', 'workers\gesture_rig.py',
     'workers\requirements.txt', 'workers\requirements.lock', 'workers\PORTRAIT_ASSET.md',
     'workers\portrait-base.png', 'workers\cartoon-portrait.png', 'workers\cartoon-studio.png', 'workers\cartoon-analyst.png')) {
@@ -67,4 +67,4 @@ if ($Archive) {
     Compress-Archive -Path (Join-Path $taskDist '*') -DestinationPath $taskZip -Force
     Write-Host "Archive: $taskZip"
 }
-Write-Host "Created $taskDist ($($taskManifest.Count) runtime files). Start-AIR3view.cmd automatically installs managed Python and the pinned workers on first run."
+Write-Host "Created $taskDist ($($taskManifest.Count) runtime files). Open AIR3view.exe. First run prepares Python/workers and creates Desktop/Start Menu icons."

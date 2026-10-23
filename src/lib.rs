@@ -21,6 +21,7 @@ pub mod project_store;
 pub mod providers;
 pub mod script_quality;
 pub mod subtitle;
+pub mod startup;
 pub mod timeline;
 pub mod timeline_media;
 pub mod workflow;

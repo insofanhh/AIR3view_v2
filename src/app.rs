@@ -157,11 +157,7 @@ fn field(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY));
     ui.add_space(8.0);
 }
-impl StudioApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        Self::from_context(&cc.egui_ctx)
-    }
-    fn from_context(ctx: &egui::Context) -> Self {
+pub(crate) fn configure_context(ctx: &egui::Context) {
         let mut visuals = egui::Visuals::dark();
         visuals.panel_fill = BG;
         visuals.window_fill = PANEL;
@@ -198,6 +194,19 @@ impl StudioApp {
             }
         }
         ctx.set_fonts(fonts);
+}
+impl StudioApp {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::from_context(&cc.egui_ctx)
+    }
+    pub(crate) fn with_runtime(ctx: &egui::Context, python: &std::path::Path, speech_url: &str) -> Self {
+        let mut app = Self::from_context(ctx);
+        app.settings.python = python.to_string_lossy().into_owned();
+        app.settings.vieneu_url = speech_url.into();
+        app
+    }
+    pub(crate) fn from_context(ctx: &egui::Context) -> Self {
+        configure_context(ctx);
         let root = data_dir();
         #[cfg(test)]
         let root = { let _ = root; std::env::temp_dir().join(format!("reaction-ui-{}", uuid::Uuid::new_v4())) };
@@ -1949,7 +1958,9 @@ impl StudioApp {
             ui.add_space(16.0);self.voice_settings(ui);});
             panel().show(&mut cols[1],|ui|{self.avatar_settings(ui);ui.add_space(12.0);heading(ui,"MEDIA TOOLS");field(ui,"FFmpeg",&mut self.settings.ffmpeg);field(ui,"ffprobe",&mut self.settings.ffprobe);field(ui,"yt-dlp",&mut self.settings.ytdlp);field(ui,"Python cho ASR",&mut self.settings.python);egui::ComboBox::from_id_salt("encoder").selected_text(&self.settings.encoder).show_ui(ui,|ui|{for e in["libx264","h264_nvenc","h264_qsv"]{ui.selectable_value(&mut self.settings.encoder,e.to_string(),e);}});});});
         ui.add_space(14.0);ui.horizontal(|ui|{if primary(ui,"Lưu cấu hình").clicked(){match self.save_settings(){Ok(())=>self.message("Đã lưu cấu hình",false),Err(e)=>self.message(format!("{e:#}"),true)}}
-if ui.button("Kiểm tra công cụ").clicked(){self.busy=true;let s=self.settings.clone();let tx=self.tx.clone();thread::spawn(move||{let _=tx.send(Event::Log(pipeline::diagnostics(&s)));let _=tx.send(Event::Done("Đã kiểm tra công cụ local".into()));});}});if !self.diagnostics.is_empty(){ui.add_space(12.0);panel().show(ui,|ui|{ui.monospace(&self.diagnostics);});}ui.label(RichText::new(format!("Dữ liệu và project: {}",data_dir().display())).size(12.0).color(MUTED));
+if ui.button("Kiểm tra công cụ").clicked(){self.busy=true;let s=self.settings.clone();let tx=self.tx.clone();thread::spawn(move||{let _=tx.send(Event::Log(pipeline::diagnostics(&s)));let _=tx.send(Event::Done("Đã kiểm tra công cụ local".into()));});}
+if ui.button("Tạo icon Desktop / Start Menu").clicked(){self.busy=true;let tx=self.tx.clone();thread::spawn(move||{let event=match crate::startup::recreate_shortcuts(){Ok(())=>Event::Done("Đã tạo icon AIR3view trên Desktop và Start Menu".into()),Err(e)=>Event::Error(format!("Không tạo được icon: {e:#}"))};let _=tx.send(event);});}
+});if !self.diagnostics.is_empty(){ui.add_space(12.0);panel().show(ui,|ui|{ui.monospace(&self.diagnostics);});}ui.label(RichText::new(format!("Dữ liệu và project: {}",data_dir().display())).size(12.0).color(MUTED));
     });});
     }
 }

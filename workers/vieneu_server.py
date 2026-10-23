@@ -25,6 +25,35 @@ os.environ["HF_HUB_CACHE"] = str(Path(os.environ.get("REACTION_MODEL_CACHE") or
                                    _data_root / "runtime" / "huggingface-regular-v1"))
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 
+
+def _watch_owner():
+    """A GUI-owned worker must also exit if its GUI crashes or is terminated."""
+    owner = os.getenv("AIR3VIEW_WORKER_OWNER_PID")
+    if os.name != "nt" or not owner:
+        return
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.WaitForSingleObject.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x00100000, False, int(owner))
+    if not handle:
+        # Parent may have exited before Python finished booting.
+        if ctypes.get_last_error() == 87:
+            os._exit(0)
+        return
+    try:
+        if kernel.WaitForSingleObject(handle, 0xFFFFFFFF) == 0:
+            os._exit(0)
+    finally:
+        kernel.CloseHandle(handle)
+
+
+threading.Thread(target=_watch_owner, name="air3view-owner", daemon=True).start()
+
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
@@ -44,8 +73,11 @@ def engine():
 
 @asynccontextmanager
 async def lifespan(app):
-    # Warm once; failures are surfaced at startup instead of on the first paid workflow.
-    engine()
+    # The native editor can open without downloading/loading a speech model.
+    # First synthesis is serialized by _lock and initializes the engine once.
+    # CLI/verification workers retain eager initialization unless opted out.
+    if os.getenv("AIR3VIEW_LAZY_VOICE") != "1":
+        engine()
     yield
 
 
@@ -64,7 +96,7 @@ class Speech(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ready", "model": "pnnbao-ump/VieNeu-TTS-v3-Turbo", "reference_audio": True, "languages": ["vi", "en"], "protocol": 3, "worker_sha256": _worker_sha256, "app": "AIR3view", "pid": os.getpid(), "python": sys.executable}
+    return {"status": "ready", "model": "pnnbao-ump/VieNeu-TTS-v3-Turbo", "reference_audio": True, "languages": ["vi", "en"], "protocol": 3, "worker_sha256": _worker_sha256, "app": "AIR3view", "pid": os.getpid(), "python": sys.executable, "session": os.getenv("AIR3VIEW_WORKER_SESSION", ""), "model_loaded": _engine is not None}
 
 
 @app.get("/v1/voices")

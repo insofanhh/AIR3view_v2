@@ -1,19 +1,23 @@
 # AIR3view
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.0. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.1. Preview, timeline và các layer nằm ngay trong app.
 
 ## Khởi chạy
 
-**Trên máy phát triển:** mở `Start-AIR3view.cmd` ở thư mục gốc sau khi build/đóng gói. Launcher dùng Python trong `.venv` của source.
+**Trên máy phát triển:** chạy EXE trong `target/x86_64-pc-windows-msvc/release` sau khi build, hoặc EXE trong gói sau khi đóng gói. Mỗi bản dùng Python trong `.venv` của chính thư mục runtime đó.
 
 **Trên máy khác (Windows 10/11 x64):**
 
 1. Tải ZIP Windows từ [GitHub Releases](https://github.com/insofanhh/AIR3view_v2/releases/latest), giải nén toàn bộ vào thư mục có quyền ghi.
-2. Mở `Start-AIR3view.cmd`. Lần đầu app tự tải Python 3.12 và cài worker đã khóa phiên bản bằng uv; không cần Python/Node cài sẵn hoặc quyền quản trị. Có thể chạy `Setup-AIR3view.cmd` trước.
+2. Bấm đúp **`AIR3view.exe`**. App hiển thị tiến trình chuẩn bị trong cửa sổ native: tự tải Python 3.12, cài worker đã khóa phiên bản bằng uv và chờ VieNeu sẵn sàng; không cần Python/Node cài sẵn hoặc quyền quản trị. Có nút Thử lại và mở thư mục nhật ký nếu gặp lỗi. Việc tải/cài chạy ở luồng nền.
 3. Cần mạng và khoảng 5–10 GB trống cho runtime, model và media. Model giọng/ASR tải khi sử dụng lần đầu. Key/phiên đăng nhập AI là cấu hình riêng của người sử dụng.
 4. Vào **Cài đặt kết nối** để chọn Gemini API hoặc Antigravity CLI đã đăng nhập. Chọn **2D local** nếu không dùng HeyGen.
 
 Giữ EXE cùng workers/tools/DLL. Gói kèm Node.js để tải YouTube. `studio-cli.exe doctor` kiểm tra runtime.
+
+Sau lần khởi chạy thành công đầu tiên, app tạo icon **AIR3view** trên Desktop và Start Menu. Những lần sau mở bằng icon; shortcut trỏ trực tiếp đến EXE, không mở cửa sổ CMD. Khi giải nén bản mới, mở EXE mới một lần để cập nhật shortcut. Giữ thư mục app ở vị trí ổn định sau đó.
+
+App dùng lại VieNeu đang chạy nếu API hỗ trợ giọng tham chiếu và Việt/Anh (protocol 3). Worker do chính phiên app tạo sẽ dừng cùng app, kể cả khi tiến trình GUI bị tắt đột ngột; app không dừng worker của phiên khác. Model giọng được nạp khi tạo giọng lần đầu, nên mở editor/thư viện không phải chờ nạp model. Chỉ một cửa sổ GUI mới được dùng cùng thư mục dữ liệu để tránh xung đột. Dịch vụ giọng từ xa được giữ nguyên theo cấu hình. `Start-AIR3view.cmd` là lối mở tương thích, chỉ chuyển tiếp sang EXE; `Setup-AIR3view.cmd` là công cụ cài runtime thủ công khi cần chẩn đoán. Nếu xóa shortcut, dùng **Cài đặt kết nối → Tạo icon Desktop / Start Menu** để tạo lại.
 
 ## Cập nhật và phát hành tự động
 
@@ -67,8 +71,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1 -SkipB
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-source.ps1
 ```
 
-- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.0-windows-x64.zip`.
-- Source sạch: `dist/AIR3view-0.2.0-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
+- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.1-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
+- Source sạch: `dist/AIR3view-0.2.1-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
 - Package dùng danh sách runtime và ghi SHA256 trong `package-manifest.json`. Không sinh bản EXE dự phòng. Có file lạ ở thư mục đích thì script báo lỗi để tránh đưa nhầm vào release.
 - Giữ `Cargo.lock`. Unit test nằm trong module Rust, chỉ biên dịch khi chạy `scripts/build.cmd test --release --lib --locked`; không nằm trong EXE release.
 - `.gitignore` loại build/dist/runtime/dữ liệu local. Không commit key, cookie hay cấu hình cá nhân.

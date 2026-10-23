@@ -6,5 +6,5 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-echo Setup finished. Open Start-AIR3view.cmd to use the app.
+echo Setup finished. Open AIR3view.exe to use the app.
 pause

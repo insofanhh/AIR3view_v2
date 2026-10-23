@@ -48,7 +48,20 @@ jobs:
       - name: Verify fresh Python, real TTS and local avatar
         shell: powershell
         run: |
-          ./dist/AIR3view/scripts/setup-workers.ps1
+          $ErrorActionPreference = 'Stop'
+          $env:REACTION_DATA_DIR = Join-Path $env:RUNNER_TEMP 'native-startup-data'
+          $env:AIR3VIEW_SHORTCUT_ROOT = Join-Path $env:RUNNER_TEMP 'native-shortcuts'
+          $env:REACTION_MODEL_CACHE = Join-Path $env:RUNNER_TEMP 'regular-model-cache'
+          $report = Join-Path $env:RUNNER_TEMP 'native-startup.json'
+          $app = Start-Process -FilePath ./dist/AIR3view/AIR3view.exe -ArgumentList ('--verify-startup="' + $report + '"') -WindowStyle Hidden -PassThru
+          if (-not $app.WaitForExit(1200000)) { throw 'Native bootstrap timed out' }
+          if (-not (Test-Path -LiteralPath $report)) { throw 'Native bootstrap did not produce a report' }
+          $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+          if ($app.ExitCode -ne 0 -or $result.status -ne 'ready' -or -not $result.owned_worker) {
+            Get-Content -LiteralPath (Join-Path $env:REACTION_DATA_DIR 'logs/startup.log') -Tail 50
+            throw ('Native bootstrap failed: ' + ($result | ConvertTo-Json -Compress))
+          }
+          Write-Host 'Native EXE bootstrap PASS: managed Python, worker health, shortcuts and lifecycle.'
           ./scripts/verify-workers.ps1 -PackagePath ./dist/AIR3view
       - name: Publish release after verification
         shell: powershell

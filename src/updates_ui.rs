@@ -32,7 +32,7 @@ impl StudioApp {
                 Some(Status::Current)=>{ui.label("Chưa có bản mới hơn build đang dùng.");},
                 None=>{},
             }
-            ui.separator();ui.label("Giải nén bản mới vào thư mục mới rồi mở Start-AIR3view.cmd. Dự án trong AppData được giữ lại. Lần đầu chạy cần mạng để thiết lập Python/model và cấu hình dịch vụ AI riêng.");
+            ui.separator();ui.label("Giải nén bản mới vào thư mục mới rồi mở AIR3view.exe. App tự chuẩn bị môi trường và cập nhật icon Desktop/Start Menu. Dự án trong AppData được giữ lại. Lần đầu chạy cần mạng để thiết lập Python/model và cấu hình dịch vụ AI riêng.");
             ui.hyperlink_to("GitHub AIR3view",crate::updates::REPOSITORY);
         });self.updates.open=open;
         #[cfg(test)]
