@@ -89,7 +89,10 @@ pub fn audio_args(p:&Project,ms:u64,end:u64)->(Vec<String>,String) {
         let fi=c.fade_in_ms.max(1) as f64/1000.;let fo=c.fade_out_ms.max(1) as f64/1000.;let duration=c.duration_ms as f64/1000.;let off=offset as f64/1000.;
         let gain=c.effective_gain(p);
         let fade=if c.fade_in_ms>0 || c.fade_out_ms>0 {
-            format!(",volume='{}*{}*{}':eval=frame",gain,
+            // A frame-level volume envelope zeros the entire first audio block
+            // at t=0, swallowing the attack of short pop/ting sounds. Evaluate
+            // fades per sample, with the original offset retained after seeking.
+            format!(",aeval='val(ch)*{}*{}*{}':c=same",gain,
                 if c.fade_in_ms>0 {format!("min(1,(t+{off})/{fi})")}else{"1".into()},
                 if c.fade_out_ms>0 {format!("min(1,({duration}-t-{off})/{fo})")}else{"1".into()})
         } else {format!(",volume={gain}")};
@@ -123,6 +126,7 @@ pub fn export_with_progress<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:
 }
 
 fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,progress:&mut F,report:&mut RenderReport)->Result<()> {
+    p.card_sound.validate()?;
     let metadata=crate::export_metadata::prepare(p,s)?;
     let composition=p.composition_snapshot();composition.validate()?;
     crate::evidence::validate(p)?;

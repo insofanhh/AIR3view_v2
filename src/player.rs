@@ -379,6 +379,21 @@ mod original_audio_tests {
     use super::*;
     use crate::{model::*,timeline};
     #[test]
+    fn live_card_sound_gain_and_mute_change_samples_without_restart() {
+        let mut p=Project{segments:vec![Segment{id:"host".into(),kind:"host".into(),duration_ms:1000,graphics:vec![GraphicCue{end_ms:900,..Default::default()}],..Default::default()}],..Default::default()};
+        p.ensure_composition();let id=p.composition.as_ref().unwrap().clips.iter().find(|c|c.track==timeline::SFX).unwrap().id.clone();
+        let player=Player::default();player.update_audio(&p);
+        let source=rodio::buffer::SamplesBuffer::new(2,48000,vec![10000_i16;10000]);
+        let mut audio=ControlledAudio{source:Box::new(source),controls:player.audio_mix.clone(),id,samples:0,offset:0,duration:1000,fade_in:0,fade_out:0,gain:0.};
+        for (enabled,gain) in [(true,0.25),(true,0.5),(false,0.5),(true,0.),(true,1.)] {
+            p.card_sound.enabled=enabled;p.card_sound.gain=gain;player.update_audio(&p);
+            while audio.samples%960!=0{audio.next();}
+            assert_eq!(audio.next(),Some(if enabled{(10000.*gain) as i16}else{0}));
+        }
+        p.timeline.tracks[timeline::GRAPHICS].muted=true;player.update_audio(&p);
+        while audio.samples%960!=0{audio.next();}assert_eq!(audio.next(),Some(0));
+    }
+    #[test]
     fn live_background_controls_change_samples_without_restarting_preview() {
         let mut p=Project{sources:vec![crate::model::Source{id:"s".into(),has_audio:true,..Default::default()}],segments:vec![Segment{id:"review".into(),kind:"review".into(),source_id:"s".into(),out_ms:1000,duration_ms:1000,..Default::default()}],..Default::default()};
         p.ensure_composition();let id=p.composition.as_ref().unwrap().clips.iter().find(|c|c.track==timeline::ORIGINAL).unwrap().id.clone();

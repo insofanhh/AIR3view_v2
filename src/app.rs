@@ -2777,8 +2777,24 @@ mod ui_tests {
         for (width,height) in [(1080.,720.),(1440.,900.)] {
             for _ in 0..3 {let _=ctx.run(egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(width,height))),..Default::default()},|ctx|app.draw(ctx));}
             for key in ["tl_undo","tl_delete","tl_play","tl_ruler"] {let r=app.hitboxes[key];assert!(r.left()>=202. && r.right()<=width && r.top()>=0. && r.bottom()<=height,"{width}x{height}: {key}: {r:?}");}
+            let row=app.hitboxes["tl_undo"];
+            for key in ["tl_redo","tl_split","tl_copy","tl_delete","tl_play","tl_snap","tl_sfx"] {
+                let r=app.hitboxes[key];
+                assert!((row.center().y-r.center().y).abs()<1.,"Toolbar wrapped at {width}: {key} {r:?}");
+                if key!="tl_snap" {assert!((row.height()-r.height()).abs()<1.,"Unequal toolbar buttons: {key} {r:?}");}
+            }
             let play=app.hitboxes["preview_source_play"];
             assert!(play.bottom()<app.hitboxes["tl_undo"].top(),"Preview transport must stay above the timeline at {width}x{height}: {play:?}");
+            let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width,height));
+            let pos=app.hitboxes["tl_sfx"].center();
+            for pressed in [true,false] {
+                let _=ctx.run(egui::RawInput{screen_rect:Some(screen),events:vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}],..Default::default()},|ctx|app.draw(ctx));
+            }
+            for _ in 0..2 {let _=ctx.run(egui::RawInput{screen_rect:Some(screen),..Default::default()},|ctx|app.draw(ctx));}
+            for key in ["card_sound_enabled","card_sound_gain","evidence_sound_gain"] {
+                assert!(screen.contains_rect(app.hitboxes[key]),"SFX popup clipped at {width}: {key} {:?}",app.hitboxes[key]);
+            }
+            let _=ctx.run(egui::RawInput{screen_rect:Some(screen),events:vec![egui::Event::Key{key:egui::Key::Escape,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers::NONE}],..Default::default()},|ctx|app.draw(ctx));
         }
     }
     #[test]

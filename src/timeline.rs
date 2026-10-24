@@ -29,7 +29,7 @@ pub const TRACK_NAMES: [&str; TRACK_COUNT] = [
     "Nền",
     "Dẫn chứng",
     "Chú thích",
-    "SFX dẫn chứng",
+    "SFX thẻ",
 ];
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
@@ -191,6 +191,7 @@ fn slice_segment(s: &Segment, from: u64, to: u64) -> Segment {
         .iter()
         .filter_map(|g| {
             let mut g = g.clone();
+            g.sound_suppressed |= g.start_ms < from;
             g.start_ms = g.start_ms.max(from).saturating_sub(from);
             g.end_ms = g.end_ms.min(to).saturating_sub(from);
             (g.start_ms < g.end_ms).then_some(g)

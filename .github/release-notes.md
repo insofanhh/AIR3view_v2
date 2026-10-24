@@ -1,4 +1,15 @@
-## AIR3view 0.2.3: cập nhật bằng một nút và nhớ cấu hình layer
+## AIR3view 0.2.4: timeline một hàng và sound effect cho thẻ thông tin
+
+- Gom nút biên tập, phát/dừng, thời gian, Snap, SFX và zoom vào một hàng ngang với chiều cao nút đồng đều. Cửa sổ hẹp hỗ trợ cuộn ngang.
+- Nút **SFX** trên timeline: bật/tắt âm thanh thẻ thông tin, chọn **Tự động / Whoosh / Pop / Ting**, chỉnh âm lượng **0–200%**. Có điều chỉnh âm lượng riêng cho ảnh dẫn chứng.
+- Nhớ thiết lập âm thanh cho dự án sau; áp dụng trong preview và MP4. Tiếng vào thẻ bám theo timing, ẩn/mute và cắt cảnh không phát lại tiếng giữa thẻ.
+- Sửa fade tính theo khối âm thanh làm mất phần đầu tiếng pop ngắn; chuyển sang tính theo từng mẫu âm thanh.
+- Đổi âm lượng/tắt SFX dùng lại cache hình; không cần tạo lại giọng hoặc avatar.
+- Kiểm thử giao diện, điều khiển âm thanh trực tiếp và MP4 thật: timing, mức âm lượng, mute và dùng lại cache hình.
+
+**Người đang dùng 0.2.3:** mở **Cập nhật → Cập nhật** để tự tải, cài và mở lại. Bản 0.2.2 trở xuống cần tải ZIP Windows và giải nén toàn bộ một lần để có updater mới.
+
+### Tính năng từ 0.2.3: cập nhật bằng một nút và nhớ cấu hình layer
 
 - Khi có Release mới, bấm **Cập nhật**: app tự tải ZIP chính thức, kiểm SHA256 và manifest, bổ sung file thiếu/thay file thay đổi trong thư mục hiện tại rồi mở lại.
 - Tự lưu trước khi đóng, chờ tác vụ đang chạy hoàn tất. Giữ dự án, cài đặt, cookie, model và môi trường Python; bổ sung thư viện khi bộ khóa thay đổi.

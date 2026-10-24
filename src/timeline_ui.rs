@@ -278,11 +278,17 @@ impl StudioApp {
         self.timeline_view.media.poll();
         let has = !self.project.segments.is_empty();
         let can_edit = has && self.layers.selected.as_ref().and_then(|id|self.project.composition_snapshot().clips.into_iter().find(|c|&c.id==id&&!c.linked)).map(|c|c.editable(&self.project)).unwrap_or_else(||editable(&self.project,self.selected).is_ok());
-        ui.horizontal_wrapped(|ui| {
+        let compact=ui.available_width()<1250.;
+        egui::ScrollArea::horizontal().id_salt("timeline_toolbar_scroll")
+            .auto_shrink([false,true]).show(ui,|ui| {ui.horizontal(|ui| {
+            ui.spacing_mut().interact_size.y=28.;
+            ui.spacing_mut().item_spacing.x=5.;
+            ui.spacing_mut().slider_width=if compact{60.}else{90.};
+            ui.style_mut().wrap_mode=Some(egui::TextWrapMode::Extend);
             let undo = ui
                 .add_enabled(
                     !self.busy && !self.timeline_view.history.past.is_empty(),
-                    egui::Button::new("Undo").min_size(Vec2::new(28., 27.)),
+                    egui::Button::new("Undo").min_size(Vec2::new(28., 28.)),
                 )
                 .on_hover_text("Hoàn tác • Ctrl+Z");
             #[cfg(test)]
@@ -293,7 +299,7 @@ impl StudioApp {
             let redo = ui
                 .add_enabled(
                     !self.busy && !self.timeline_view.history.future.is_empty(),
-                    egui::Button::new("Redo").min_size(Vec2::new(28., 27.)),
+                    egui::Button::new("Redo").min_size(Vec2::new(28., 28.)),
                 )
                 .on_hover_text("Làm lại • Ctrl+Shift+Z / Ctrl+Y");
             #[cfg(test)]
@@ -323,7 +329,7 @@ impl StudioApp {
             });
             self.timeline_button(
                 ui,
-                "Sao chép",
+                if compact{"Copy"}else{"Sao chép"},
                 "copy",
                 has,
                 "Sao chép cảnh liên kết • Ctrl+C",
@@ -337,7 +343,7 @@ impl StudioApp {
             );
             self.timeline_button(
                 ui,
-                "Nhân bản",
+                if compact{"×2"}else{"Nhân bản"},
                 "duplicate",
                 can_edit,
                 "Nhân bản cả nhóm cảnh • Ctrl+D",
@@ -351,7 +357,7 @@ impl StudioApp {
             );
             ui.add_enabled_ui(!self.busy, |ui| {
                 if ui
-                    .button("+ Nguồn")
+                    .button(if compact{"+"}else{"+ Nguồn"})
                     .on_hover_text("Nhập video local")
                     .clicked()
                 {
@@ -366,14 +372,12 @@ impl StudioApp {
                 ui.label("Kéo thân clip để đổi thứ tự; kéo mép để rút ngắn.");
                 ui.label("Các track cùng cảnh liên kết; khóa một track sẽ bảo vệ nhóm cảnh.");
             });
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new("TIMELINE").strong().size(11.).color(MUTED));
-            let previous = ui.small_button("|◀").on_hover_text("Về đầu • Home");
+            ui.separator();
+            let previous = ui.button("|◀").on_hover_text("Về đầu • Home");
             if previous.clicked() {
                 self.seek_timeline(0);
             }
-            if ui.small_button("◀").on_hover_text("Lùi 1 frame").clicked() {
+            if ui.button("◀").on_hover_text("Lùi 1 frame").clicked() {
                 self.step_timeline(false);
             }
             let play = ui
@@ -382,7 +386,7 @@ impl StudioApp {
                     egui::Button::new(if self.player.playing {
                         "Ⅱ"
                     } else {
-                        "▶ Timeline"
+                        "▶"
                     }),
                 )
                 .on_hover_text("Space • Phát layer trực tiếp, không dựng MP4");
@@ -391,7 +395,7 @@ impl StudioApp {
             if play.clicked() {
                 self.play_timeline();
             }
-            if ui.small_button("▶").on_hover_text("Tiến 1 frame").clicked() {
+            if ui.button("▶|").on_hover_text("Tiến 1 frame").clicked() {
                 self.step_timeline(true);
             }
             ui.label(
@@ -404,6 +408,14 @@ impl StudioApp {
                 .color(TEAL)
                 .size(11.),
             );
+            let _sfx=ui.menu_button("SFX",|ui| {
+                ui.style_mut().wrap_mode=Some(egui::TextWrapMode::Wrap);
+                ui.set_width(270.);
+                self.card_sound_settings_ui(ui);
+                ui.separator();
+                self.evidence_sound_settings_ui(ui);
+            });
+            #[cfg(test)] self.hitboxes.insert("tl_sfx".into(),_sfx.response.rect);
             let snap = ui.add_enabled(
                 !self.busy,
                 egui::Checkbox::new(&mut self.project.timeline.snapping, "Snap"),
@@ -413,26 +425,26 @@ impl StudioApp {
             if snap.changed() {
                 self.dirty = true;
             }
-            if ui.small_button("−").clicked() {
+            if ui.button("−").clicked() {
                 self.zoom = (self.zoom / 1.4).max(0.25);
             }
             ui.add(
                 egui::Slider::new(&mut self.zoom, 0.25..=32.)
                     .logarithmic(true)
                     .show_value(false)
-                    .text("Zoom"),
+                    .text(if compact{""}else{"Zoom"}),
             );
-            if ui.small_button("+").clicked() {
+            if ui.button("+").clicked() {
                 self.zoom = (self.zoom * 1.4).min(32.);
             }
             if ui
-                .small_button("Vừa")
+                .button("Vừa")
                 .on_hover_text("Vừa toàn bộ timeline • F")
                 .clicked()
             {
                 self.zoom = 1.;
             }
-        });
+        });});
         if !has {
             ui.label("Thêm nguồn hoặc tạo kịch bản để bắt đầu.");
             return;

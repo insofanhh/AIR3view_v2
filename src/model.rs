@@ -385,6 +385,8 @@ pub struct GraphicCue {
     pub start_ms: u64,
     pub end_ms: u64,
     pub evidence: String,
+    /// A split inside a visible card must not replay its entrance sound.
+    pub sound_suppressed: bool,
 }
 impl Default for GraphicCue {
     fn default() -> Self {
@@ -395,6 +397,7 @@ impl Default for GraphicCue {
             start_ms: 0,
             end_ms: 2000,
             evidence: String::new(),
+            sound_suppressed: false,
         }
     }
 }
@@ -550,6 +553,7 @@ pub struct Project {
     pub composition: Option<crate::composition::Composition>,
     pub layer_defaults: crate::layer_defaults::LayerDefaults,
     pub evidence_settings: crate::evidence::EvidenceSettings,
+    pub card_sound: crate::evidence_sfx::CardSoundSettings,
     #[serde(default="crate::export_metadata::legacy_settings")]
     pub export_metadata: crate::export_metadata::MetadataSettings,
 }
@@ -601,6 +605,7 @@ pub struct ProjectDefaults {
     pub subtitles: SubtitleStyle,
     pub production: Option<ProductionSettings>,
     pub evidence_settings: crate::evidence::EvidenceSettings,
+    pub card_sound: crate::evidence_sfx::CardSoundSettings,
     #[serde(default="crate::export_metadata::legacy_settings")]
     pub export_metadata: crate::export_metadata::MetadataSettings,
 }
@@ -610,7 +615,7 @@ impl ProjectDefaults {
         rules.required_ranges.clear();
         rules.excluded_ranges.clear();
         let export_metadata=crate::export_metadata::MetadataSettings{title:String::new(),creation_time:String::new(),..p.export_metadata.clone()};
-        Self { layer_defaults: crate::layer_defaults::LayerDefaults::from_project(p), rules, output: p.output.clone(), subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),export_metadata }
+        Self { layer_defaults: crate::layer_defaults::LayerDefaults::from_project(p), rules, output: p.output.clone(), subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),card_sound:p.card_sound.clone(),export_metadata }
     }
     pub fn apply(&self, p: &mut Project) {
         p.layer_defaults = self.layer_defaults.clone();
@@ -625,6 +630,7 @@ impl ProjectDefaults {
         p.subtitles = self.subtitles.clone();
         p.production = self.production.clone();
         p.evidence_settings = self.evidence_settings.clone();
+        p.card_sound = self.card_sound.clone();
         p.export_metadata = self.export_metadata.clone();
     }
     pub fn load(path: &Path) -> Option<Self> {
@@ -664,6 +670,7 @@ impl Default for Project {
             composition: None,
             layer_defaults: Default::default(),
             evidence_settings: Default::default(),
+            card_sound: Default::default(),
             export_metadata: Default::default(),
         }
     }
@@ -745,6 +752,7 @@ impl Project {
         Ok(p)
     }
     pub fn validate_configuration(&self) -> Result<()> {
+        self.card_sound.validate()?;
         crate::evidence::validate(self)?;
         ensure!((1..=8).contains(&self.rules.intercut_count)
             && (1..=10).contains(&self.rules.intercut_min_seconds)
@@ -1215,6 +1223,7 @@ mod tests {
         old.output.blur_background = true;
         old.output.avatar_scale = 0.42;
         old.subtitles.highlight = [12, 34, 56];
+        old.card_sound=crate::evidence_sfx::CardSoundSettings{enabled:false,style:"pop".into(),gain:0.6};
         let path = temp.path().join("project-defaults.json");
         write_json(&path, &ProjectDefaults::from_project(&old)).unwrap();
         let mut fresh = Project::default();
@@ -1227,6 +1236,7 @@ mod tests {
         assert!(fresh.output.blur_background);
         assert_eq!(fresh.output.avatar_scale, 0.42);
         assert_eq!(fresh.subtitles.highlight, [12, 34, 56]);
+        assert_eq!(fresh.card_sound,old.card_sound);
     }
     #[test]
     fn rejects_non_youtube_and_playlist() {

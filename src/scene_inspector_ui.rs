@@ -326,6 +326,7 @@ fn scene_details(ui: &mut egui::Ui, s: &mut Segment, geo: &mut SceneGeometry, la
         egui::CollapsingHeader::new(format!("Thẻ thông tin & số liệu ({})", s.graphics.len()))
             .id_salt("scene_graphics")
             .show(ui, |ui| {
+                label(ui,"Âm thanh thẻ: nút SFX trên thanh timeline (hiệu ứng / âm lượng).");
                 let mut remove = None;
                 for (index, cue) in s.graphics.iter_mut().enumerate() {
                     ui.push_id(index, |ui| {

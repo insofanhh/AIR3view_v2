@@ -86,13 +86,15 @@ impl LayerClip {
     pub fn effective_gain(&self,p:&Project)->f32 {
         if self.background_original(p) {
             if p.output.original_audio_enabled {self.gain*p.output.original_audio_gain}else{0.}
-        }else{self.gain}
+        }else if self.track==timeline::SFX && self.evidence_id.is_none() {self.gain*p.card_sound.gain}
+        else{self.gain}
     }
     pub fn still(&self)->bool {self.media.as_ref().and_then(|p|p.extension()).is_some_and(|e|e.eq_ignore_ascii_case("png")||e.eq_ignore_ascii_case("jpg")||e.eq_ignore_ascii_case("jpeg"))}
     pub fn enabled(&self,p:&Project)->bool {
-        self.visible && !p.timeline.tracks[self.track].muted && (!self.background_original(p)||p.output.original_audio_enabled) && (self.track!=timeline::SFX ||
-            (!p.timeline.tracks[timeline::EVIDENCE].muted && p.evidence_settings.sound_enabled &&
-             p.composition.as_ref().is_none_or(|comp|comp.clips.iter().any(|c|c.track==timeline::EVIDENCE&&c.group==self.group&&c.visible))))
+        self.visible && !p.timeline.tracks[self.track].muted && (!self.background_original(p)||p.output.original_audio_enabled) && (self.track!=timeline::SFX || {
+            let (parent,on)=if self.evidence_id.is_some(){(timeline::EVIDENCE,p.evidence_settings.enabled&&p.evidence_settings.sound_enabled)}else{(timeline::GRAPHICS,p.card_sound.enabled)};
+            on && !p.timeline.tracks[parent].muted && p.composition.as_ref().is_none_or(|comp|comp.clips.iter().any(|c|c.track==parent&&c.group==self.group&&c.visible))
+        })
     }
     pub fn editable(&self,p:&Project)->bool {
         !self.locked && !p.segments.iter().any(|s|s.id==self.scene_id&&s.locked)
@@ -105,7 +107,7 @@ impl Composition {
     pub fn duration_ms(&self)->u64 { self.clips.iter().map(LayerClip::end).max().unwrap_or(0) }
     pub fn key(p:&Project)->String {
         // Transforms are intentionally absent; adjusting them never rebuilds assets.
-        media::hash(serde_json::to_vec(&("original-audio-v1",&p.segments,&p.evidence_settings)).unwrap_or_default())
+        media::hash(serde_json::to_vec(&("card-sfx-v1",&p.segments,&p.evidence_settings,&p.card_sound.style)).unwrap_or_default())
     }
     pub fn from_project(p:&Project)->Self {
         let (w,h)=p.output.dimensions(); let (w,h)=(w as f32,h as f32);
@@ -154,7 +156,12 @@ impl Composition {
                     start_ms:start,duration_ms:s.duration_ms,media_in_ms,cue_in_ms:0,media,proxy,transform,
                     z:timeline::TRACK_ROLES[track].z(),
                     visible:true,locked:false,linked:true,gain:if track==timeline::ORIGINAL&&s.kind=="review" {1.}else{s.audio_gain},fade_in_ms:0,fade_out_ms:0,
-                    evidence_id:None,group:None,motion:Default::default(),timing_manual:false });
+                    evidence_id:None,group:if track==timeline::GRAPHICS {Some(format!("{}:gfx",s.id))}else{None},motion:Default::default(),timing_manual:false });
+            }
+            for (index,cue) in s.graphics.iter().enumerate().filter(|(_,g)|!g.sound_suppressed&&g.start_ms<g.end_ms&&g.start_ms<s.duration_ms) {
+                if let Some((path,sound_duration))=crate::evidence_sfx::selected_sound(&p.card_sound.style,index,&cue.kind) {
+                    result.clips.push(LayerClip{id:format!("{}:gfx:{index}:{}",s.id,timeline::SFX),scene_id:s.id.clone(),track:timeline::SFX,start_ms:start+cue.start_ms,duration_ms:sound_duration.min(cue.end_ms.min(s.duration_ms)-cue.start_ms).max(1),media_in_ms:0,cue_in_ms:0,media:Some(path),proxy:None,transform:Transform::default(),z:0,visible:true,locked:false,linked:false,gain:1.,fade_in_ms:5,fade_out_ms:40,evidence_id:None,group:Some(format!("{}:gfx",s.id)),motion:Default::default(),timing_manual:false});
+                }
             }
             if p.evidence_settings.enabled {
                 let items:Vec<_>=s.evidence_items.iter().filter(|e|e.enabled).collect();
@@ -176,7 +183,7 @@ impl Composition {
                         let kind=if stack&&item.transition=="slide_fade"{"stack_pop".into()}else{item.transition.clone()};
                         result.clips.push(LayerClip{id:format!("{group}:{track}"),scene_id:s.id.clone(),track,start_ms:start+cue+delay,duration_ms:duration-delay,media_in_ms:0,cue_in_ms:item.motion_in_ms+delay,media:Some(p.root.join(asset)),proxy:None,transform:transform.clone(),z:if stack{11+index as i32*2+if track==timeline::ANNOTATION{1}else{0}}else{timeline::TRACK_ROLES[track].z()},visible:true,locked:false,linked:false,gain:1.,fade_in_ms:0,fade_out_ms:0,evidence_id:Some(item.id.clone()),group:Some(group.clone()),motion:crate::evidence::Motion{kind,duration_ms:motion_duration,zoom:item.zoom,delay_ms:reveal,backdrop_ms:if stack{windows[index].2.map(|t|t+item.motion_in_ms)}else{None}},timing_manual:false});
                     }
-                    if p.evidence_settings.sound_enabled&&item.motion_in_ms==0&&item.asset.is_some() {
+                    if item.motion_in_ms==0&&item.asset.is_some() {
                         if let Some((path,sound_duration))=crate::evidence_sfx::sound(index,&item.kind){
                             result.clips.push(LayerClip{id:format!("{group}:{}",timeline::SFX),scene_id:s.id.clone(),track:timeline::SFX,start_ms:start+cue,duration_ms:sound_duration.min(duration).max(1),media_in_ms:0,cue_in_ms:0,media:Some(path),proxy:None,transform:Transform::default(),z:0,visible:true,locked:false,linked:false,gain:p.evidence_settings.sound_gain,fade_in_ms:5,fade_out_ms:40,evidence_id:Some(item.id.clone()),group:Some(group.clone()),motion:Default::default(),timing_manual:false});
                         }
@@ -360,13 +367,13 @@ impl Project {
                     if preserve{c.transform=prior.transform.clone();}
                     if !automatic_upgrade {c.z=prior.z;}c.visible=prior.visible;
                     c.locked=prior.locked;c.linked=prior.linked;
-                    c.group=prior.group.clone();c.timing_manual=prior.timing_manual;
+                    if prior.group.is_some() || c.track!=timeline::GRAPHICS {c.group=prior.group.clone();}c.timing_manual=prior.timing_manual;
                     if prior.timing_manual {c.motion=prior.motion.clone();}
                     if c.track==timeline::SFX || c.background_original(self) {c.gain=prior.gain;}
                     if !prior.linked && (prior.evidence_id.is_none()||prior.timing_manual) {c.start_ms=prior.start_ms;c.duration_ms=prior.duration_ms;c.media_in_ms=prior.media_in_ms;c.cue_in_ms=prior.cue_in_ms;}
                 } }
                 for clip in old.clips.iter().filter(|c|!c.linked) {
-                    if !new.clips.iter().any(|c|c.id==clip.id) && (clip.evidence_id.is_none()||!clip.id.contains(":ev:")) && self.segments.iter().any(|s|s.id==clip.scene_id&&clip.evidence_id.as_ref().is_none_or(|id|self.evidence_settings.enabled&&s.evidence_items.iter().any(|e|&e.id==id&&e.enabled&&(clip.track!=timeline::ANNOTATION||e.annotation_asset.is_some())))) {new.clips.push(clip.clone());}
+                    if !new.clips.iter().any(|c|c.id==clip.id) && !clip.id.contains(":gfx:") && (clip.evidence_id.is_none()||!clip.id.contains(":ev:")) && self.segments.iter().any(|s|s.id==clip.scene_id&&clip.evidence_id.as_ref().is_none_or(|id|self.evidence_settings.enabled&&s.evidence_items.iter().any(|e|&e.id==id&&e.enabled&&(clip.track!=timeline::ANNOTATION||e.annotation_asset.is_some())))) {new.clips.push(clip.clone());}
                 }
                 new.removed=old.removed.clone();new.clips.retain(|c|!new.removed.contains(&c.id));
             }

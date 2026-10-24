@@ -263,6 +263,9 @@ impl StudioApp {
         if t!=c.transform {
             self.set_layer_transform(&id,t);self.timeline_view.history.record(before);
         }
+        if c.track==crate::timeline::GRAPHICS || (c.track==crate::timeline::SFX&&c.evidence_id.is_none()) {
+            ui.separator();self.card_sound_settings_ui(ui);
+        }
         egui::CollapsingHeader::new("Danh sách layer • ẩn / khóa").id_salt("layer_visibility").show(ui,|ui|{
         ui.spacing_mut().interact_size.y=22.;
         ui.spacing_mut().button_padding=Vec2::new(4.,2.);

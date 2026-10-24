@@ -51,6 +51,59 @@ fn crop_ui(ui: &mut egui::Ui, id: &str, c: &mut [f32; 4]) {
     c[3] = c[3].min(1. - c[1]);
 }
 impl StudioApp {
+    pub(super) fn card_sound_settings_ui(&mut self,ui:&mut egui::Ui) {
+        ui.label(RichText::new("ÂM THANH THẺ THÔNG TIN").strong().color(MUTED));
+        let old=self.project.card_sound.clone();
+        let s=&mut self.project.card_sound;
+        let _enabled=ui.checkbox(&mut s.enabled,"Sound effect khi thẻ xuất hiện");
+        #[cfg(test)] self.hitboxes.insert("card_sound_enabled".into(),_enabled.rect);
+        ui.add_enabled_ui(s.enabled,|ui| {
+            choose(ui,"card_sound_style","Hiệu ứng",&mut s.style,&[
+                ("auto","Tự động theo loại thẻ"),("whoosh","Whoosh"),("pop","Pop"),("ting","Ting")]);
+            ui.spacing_mut().slider_width=(ui.available_width()-95.).clamp(60.,180.);
+            ui.label("Âm lượng");
+            let mut percent=s.gain*100.;
+            let gain=ui.add(egui::Slider::new(&mut percent,0.0..=200.).suffix(" %"));
+            #[cfg(test)] self.hitboxes.insert("card_sound_gain".into(),gain.rect);
+            if gain.changed(){s.gain=percent/100.;}
+        });
+        if old!=self.project.card_sound {
+            let style_changed=old.style!=self.project.card_sound.style;
+            let mut before=self.project.clone();before.card_sound=old;
+            self.project.ensure_composition();
+            self.timeline_view.history.record(before);
+            let playing=self.player.playing;
+            self.transform_changed();
+            if style_changed && playing {
+                self.player.composition(self.project.clone(),self.settings.clone(),self.timeline_view.cursor,true);
+            }
+        }
+        ui.label(RichText::new("Áp dụng cho mọi thẻ thông tin / số liệu; 0% để tắt tiếng.").size(11.).color(MUTED));
+        if self.project.timeline.tracks[timeline::SFX].muted||self.project.timeline.tracks[timeline::GRAPHICS].muted {
+            ui.colored_label(egui::Color32::YELLOW,"Track SFX hoặc Thẻ thông tin đang mute.");
+        }
+    }
+    pub(super) fn evidence_sound_settings_ui(&mut self,ui:&mut egui::Ui) {
+        ui.label(RichText::new("ÂM THANH ẢNH DẪN CHỨNG").strong().color(MUTED));
+        let old=(self.project.evidence_settings.sound_enabled,self.project.evidence_settings.sound_gain);
+        let s=&mut self.project.evidence_settings;
+        ui.checkbox(&mut s.sound_enabled,"Whoosh / pop / ting khi ảnh xuất hiện");
+        ui.add_enabled_ui(s.enabled&&s.sound_enabled,|ui| {
+            ui.spacing_mut().slider_width=(ui.available_width()-95.).clamp(60.,180.);
+            ui.label("Âm lượng");
+            let mut percent=s.sound_gain*100.;
+            let gain=ui.add(egui::Slider::new(&mut percent,0.0..=100.).suffix(" %"));
+            #[cfg(test)] self.hitboxes.insert("evidence_sound_gain".into(),gain.rect);
+            if gain.changed(){s.sound_gain=percent/100.;}
+        });
+        if (s.sound_enabled,s.sound_gain)!=old {
+            let mut before=self.project.clone();before.evidence_settings.sound_enabled=old.0;before.evidence_settings.sound_gain=old.1;
+            self.project.ensure_composition();
+            let gain=self.project.evidence_settings.sound_gain;
+            if let Some(comp)=&mut self.project.composition {for c in comp.clips.iter_mut().filter(|c|c.track==timeline::SFX&&c.evidence_id.is_some()){c.gain=gain;}}
+            self.timeline_view.history.record(before);self.transform_changed();
+        }
+    }
     pub(super) fn evidence_settings_ui(&mut self, ui: &mut egui::Ui) {
         heading(ui, "DẪN CHỨNG CHO HOST");
         let old=serde_json::to_vec(&self.project.evidence_settings).unwrap_or_default();
@@ -104,11 +157,6 @@ impl StudioApp {
                         .suffix(" ms"),
                 );
             });
-            ui.checkbox(&mut s.sound_enabled,"Âm thanh khi thẻ xuất hiện");
-            ui.add_enabled_ui(s.sound_enabled,|ui|{
-                ui.add(egui::Slider::new(&mut s.sound_gain,0.0..=1.0).text("Âm lượng"));
-                ui.label(RichText::new("Whoosh mở thẻ · pop chuyển ảnh · ting nhấn dữ kiện").size(11.).color(MUTED));
-            });
         });
         if serde_json::to_vec(&self.project.evidence_settings).unwrap_or_default()!=old {
             if self.project.evidence_settings.crop_percent!=old_crop {
@@ -117,10 +165,12 @@ impl StudioApp {
                 }}
             }
             self.project.ensure_composition();
-            let gain=self.project.evidence_settings.sound_gain;
-            if let Some(c)=&mut self.project.composition {for clip in c.clips.iter_mut().filter(|c|c.track==timeline::SFX){clip.gain=gain;}}
             self.transform_changed();self.request_frame();
         }
+        ui.separator();
+        self.card_sound_settings_ui(ui);
+        ui.separator();
+        self.evidence_sound_settings_ui(ui);
         if old_crop!=self.project.evidence_settings.crop_percent && !self.project.segments.is_empty() {
             self.message("Đã đổi crop. Bấm Tạo thẻ / cập nhật ảnh dẫn chứng để áp dụng cho preview và xuất MP4.",false);
         }
@@ -572,6 +622,29 @@ impl StudioApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sound_controls_fit_adjust_volume_keep_voice_and_undo() {
+        for width in [240.,320.,560.] {
+            let ctx=egui::Context::default();let mut app=StudioApp::from_context(&ctx);
+            app.capture_path=None;app.project=Project::default();
+            app.project.segments=vec![Segment{id:"s".into(),audio:Some("keep.wav".into()),asset_key:"keep-voice".into(),..Default::default()}];
+            let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width+24.,720.));
+            let draw=|app:&mut StudioApp,events|{let _=ctx.run(egui::RawInput{screen_rect:Some(screen),events,..Default::default()},|ctx|{
+                egui::CentralPanel::default().show(ctx,|ui|{app.card_sound_settings_ui(ui);ui.separator();app.evidence_sound_settings_ui(ui);});
+            });};
+            for _ in 0..3{draw(&mut app,vec![]);}
+            for key in ["card_sound_enabled","card_sound_gain","evidence_sound_gain"] {assert!(screen.contains_rect(app.hitboxes[key]),"{key} outside {width}px panel: {:?}",app.hitboxes[key]);}
+            let slider=app.hitboxes["card_sound_gain"];
+            let pos=egui::pos2(slider.left()+40.,slider.center().y);
+            for pressed in [true,false]{draw(&mut app,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);}
+            assert_ne!(app.project.card_sound.gain,0.25);assert!(app.dirty);
+            assert!(app.timeline_view.history.undo(&mut app.project));assert_eq!(app.project.card_sound.gain,0.25);
+            let pos=app.hitboxes["card_sound_enabled"].center();
+            for pressed in [true,false]{draw(&mut app,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);}
+            assert!(!app.project.card_sound.enabled);
+            assert_eq!(app.project.segments[0].asset_key,"keep-voice");assert_eq!(app.project.segments[0].audio.as_deref(),Some(std::path::Path::new("keep.wav")));
+        }
+    }
     #[test]
     fn static_layers_stay_visible_after_initial_texture_upload_during_playback() {
         let temp = tempfile::tempdir().unwrap();
