@@ -281,6 +281,7 @@ pub fn build_prompt(p: &Project) -> String {
     let speech_budget = format!("Ước lượng lời {} ở {:.2} đơn vị tách khoảng trắng/giây; ngân sách tổng = (thời lượng đích - hook - các đoạn source) × tốc độ. English ban đầu khoảng 150 words/minute; sau TTS dùng thời lượng WAV thật và hiệu chỉnh theo voice, không dùng tốc độ tiếng Việt cho English.", crate::content_language::label(&p.rules.language), crate::content_language::rate(&p.rules.language));
     let mut rules = p.rules.clone();
     rules.prompt = rules.resolved_prompt();
+    rules.prompt.push_str("\nNHỊP DỰNG MẶC ĐỊNH: Dùng nhịp review xen hiện trường, tôn trọng các thiết lập hook, số đoạn gốc, thời lượng và yêu cầu riêng của người dùng. Sau hook (nếu bật), Host đặt bối cảnh ngắn rồi review dùng footage khớp diễn biến; quay về Host khi phân tích bước ngoặt, hậu quả và kết luận. Mỗi cảnh lời bình tập trung một ý, ưu tiên khoảng 8–14 giây lời nói theo tốc độ ngôn ngữ đã cung cấp; thời lượng cuối lấy từ WAV thật, không thêm khoảng lặng để đủ giây. Rải đều các đoạn source xen kẽ được yêu cầu ở những bước ngoặt trong toàn video, sau câu trọn ý, ưu tiên tiếng hò hét/đối thoại/âm thanh hiện trường có nghĩa. Với video khoảng 100 giây và 3 intercut, tham chiếu đổi về tiếng gốc sau khoảng 20–30 giây lời review; co giãn vị trí theo Độ dài và số intercut, không ép mọi video vào cùng timestamp. Tránh một khối Host hoặc review dài, không bắt buộc luân phiên máy móc từng cảnh, không cắt ngang câu, không lặp hoặc bịa cảnh để đủ nhịp. Cuối video kết thúc cùng hình và lời kết, không thêm cảnh trống hay hiệu ứng âm thanh kết bài riêng.");
     let locked:Vec<_>=p.segments.iter().filter(|v|v.locked).collect();
     if !locked.is_empty() {
         rules.prompt.push_str(&format!("\nCẢNH ĐÃ KHÓA: giữ nguyên loại cảnh, nguồn, mốc in/out, narration, gesture và emotion của các cảnh sau trong JSON trả về. Không bỏ hay sửa các cảnh này:\n{}",serde_json::to_string(&locked).unwrap()));
@@ -1042,6 +1043,20 @@ pub fn heygen(s: &Settings, audio: &Path, folder: &Path, cancel: &Cancel) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn default_pacing_keeps_selected_hook_intercuts_language_and_duration() {
+        for language in ["vi","en"] {
+            let mut p=Project::default();p.rules.language=language.into();p.rules.min_seconds=180;p.rules.max_seconds=240;
+            p.rules.intercut_count=5;p.rules.intercut_min_seconds=3;p.rules.intercut_max_seconds=6;
+            let prompt=build_prompt(&p);
+            assert!(prompt.contains("NHỊP DỰNG MẶC ĐỊNH")&&prompt.contains("8–14 giây")&&prompt.contains("WAV thật"));
+            assert!(prompt.contains("Chọn đúng 5 đoạn")&&prompt.contains("3–6 giây"));
+            assert!(prompt.contains(&crate::content_language::contract(language)));
+            p.rules.hook_enabled=false;p.rules.intercuts_enabled=false;
+            let prompt=build_prompt(&p);
+            assert!(!prompt.contains("HOOK BẮT BUỘC")&&!prompt.contains("ĐOẠN GỐC XEN KẼ BẮT BUỘC"));
+        }
+    }
     #[test]
     fn url_capability_cache_expires_and_tracks_cli_configuration() {
         let temp=tempfile::tempdir().unwrap();

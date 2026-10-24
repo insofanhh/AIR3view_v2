@@ -25,7 +25,10 @@ pub struct EvidenceSettings {
     pub default_duration_ms: u64,
     /// Stack is a presentation policy, independent of source/proof selection.
     pub presentation: String,
+    /// Continuous movement while a card is visible, separate from its entrance.
+    pub motion: String,
     pub sound_enabled: bool,
+    pub sound_style: String,
     pub sound_gain: f32,
     /// Trim this percentage from each edge of the original frame, intersected with manual crop.
     pub crop_percent: f32,
@@ -39,7 +42,9 @@ impl Default for EvidenceSettings {
             density: 3,
             default_duration_ms: 3500,
             presentation: "stack".into(),
+            motion: "zoom".into(),
             sound_enabled: true,
+            sound_style: "whoosh".into(),
             sound_gain: 0.25,
             crop_percent: 0.,
         }
@@ -173,6 +178,8 @@ pub fn validate(p: &Project) -> Result<()> {
     ensure!(p.evidence_settings.crop_percent.is_finite() && (0.0..=30.0).contains(&p.evidence_settings.crop_percent),
         "Crop ảnh dẫn chứng phải từ 0 đến 30% mỗi cạnh");
     ensure!(matches!(p.evidence_settings.presentation.as_str(), "stack" | "classic")
+        && matches!(p.evidence_settings.motion.as_str(), "none" | "zoom" | "drift")
+        && matches!(p.evidence_settings.sound_style.as_str(), "auto" | "whoosh" | "pop" | "ting")
         && p.evidence_settings.sound_gain.is_finite() && (0.0..=1.0).contains(&p.evidence_settings.sound_gain),
         "Thiết lập motion / âm thanh dẫn chứng không hợp lệ");
     ensure!(
@@ -459,24 +466,21 @@ pub fn stack_layout(p: &Project, index: usize) -> Transform {
     Transform{x:x+offset*0.035,y:y+offset.abs()*if p.output.portrait{0.11}else{0.028},width,
         height:width*w as f32/h as f32*0.75,rotation:offset*1.2,..Default::default()}
 }
-/// Early reveals use the beginning of a host scene, retaining explicit manual cues.
+/// Entrances divide the scene evenly; every automatic card remains behind the
+/// later cards until the scene ends, with its motion clock still running.
+/// Explicit manual cues are retained and are exempt from automatic scheduling.
 /// Each result is (cue, duration, next-card handoff relative to cue).
-pub fn stack_windows(seg:&Segment,items:&[&EvidenceItem],density:usize)->Vec<(u64,u64,Option<u64>)> {
+pub fn stack_windows(seg:&Segment,items:&[&EvidenceItem])->Vec<(u64,u64,Option<u64>)> {
     let count=items.len();if count==0{return vec![];}
-    let step=(seg.duration_ms.saturating_sub(500)/count as u64).clamp(100,2300);
-    let first=120.min(seg.duration_ms/10);let mut previous=0;
+    let first=120.min(seg.duration_ms/10);
+    let span=seg.duration_ms.saturating_sub(first);
+    let boundary=|i:usize|first+((span as u128*i as u128)/count as u128) as u64;
     let starts:Vec<_>=items.iter().enumerate().map(|(i,item)|{
-        let cue=if item.timing_manual {window(seg,item).0}else {
-            let early=first+i as u64*step;
-            let lead=item.start_ms.saturating_sub(650);
-            early.min(lead.max(first)).max(if i==0 {first}else{previous+step.min(1600)})
-                .min(seg.duration_ms.saturating_sub(100))
-        };previous=cue;cue
+        if item.timing_manual {window(seg,item).0}else {boundary(i)}
     }).collect();
     items.iter().enumerate().map(|(i,item)|{
         let cue=starts[i];if item.timing_manual{return (cue,window(seg,item).1,None);}
-        let stop=starts.get(i+density.max(1)).copied().unwrap_or(seg.duration_ms);
-        let duration=stop.saturating_sub(cue).max(1);
+        let duration=seg.duration_ms.saturating_sub(cue).max(1);
         let handoff=starts.iter().enumerate().filter(|(j,t)|*j>i&&**t>cue&&**t<cue+duration)
             .map(|(_,t)|*t-cue).min();
         (cue,duration,handoff)
@@ -700,7 +704,7 @@ pub fn prepare(
                         String::new()
                     },
                     p.evidence_settings.crop_percent,
-                    "evidence-card-v6-content",
+                    "evidence-card-v8-adaptive-photo",
                     &p.rules.language,
                 ))
                 .unwrap_or_default(),
@@ -996,6 +1000,150 @@ mod language_tests {
         assert_eq!(english.as_raw(),card(&item,&frame,None,"en").unwrap().0.as_raw());
         assert!(item.proof.quote.contains("trích dẫn gốc"));
     }
+
+    #[test]
+    fn photo_is_large_and_all_four_corners_survive_contain() {
+        for (w,h) in [(160,90),(90,160),(160,160),(960,160)] {
+            let mut source=RgbaImage::from_pixel(w,h,Rgba([20,180,60,255]));
+            for (x,y,color) in [(0,0,[255,0,0,255]),(w-10,0,[0,0,255,255]),
+                (0,h-10,[255,0,255,255]),(w-10,h-10,[0,255,255,255])] {
+                for dx in 0..10 {for dy in 0..10 {source.put_pixel(x+dx,y+dy,Rgba(color));}}
+            }
+            for kind in ["frame","fact","stat"] {
+                let item=EvidenceItem{kind:kind.into(),label:"Source frame".into(),value:"12".into(),claim:"Verified detail".into(),..Default::default()};
+                let (img,_)=card(&item,&source,None,"en").unwrap();
+                let points:Vec<_>=img.enumerate_pixels().filter(|(_,_,p)|p[1]>150&&p[0]<40&&p[2]<90).map(|(x,y,_)|(x,y)).collect();
+                let minx=points.iter().map(|v|v.0).min().unwrap();let maxx=points.iter().map(|v|v.0).max().unwrap();
+                let miny=points.iter().map(|v|v.1).min().unwrap();let maxy=points.iter().map(|v|v.1).max().unwrap();
+                if w<=h*2 {assert!(maxy-miny>=400,"Photo must use the card height, {kind} {w}x{h}");}
+                if w>h {assert!(maxx-minx>=710,"Landscape image was shrunk into a thumbnail");}
+                if w>h*2 {assert!(img.height()<350,"Wide crops must not leave an empty 4:3 card");}
+                for color in [[255,0,0,255],[0,0,255,255],[255,0,255,255],[0,255,255,255]] {
+                    assert!(img.pixels().any(|p|p.0==color),"An original image corner was cropped");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stacked_cards_keep_earlier_images_until_scene_end() {
+        for duration in [1000,15000,90000] {for count in 1..=8 {
+            let seg=Segment{duration_ms:duration,..Default::default()};
+            let items:Vec<_>=(0..count).map(|i|EvidenceItem{start_ms:200+i as u64*100,..Default::default()}).collect();
+            let windows=stack_windows(&seg,&items.iter().collect::<Vec<_>>());
+            assert!(windows[0].0<=120);
+            let expected=(duration-windows[0].0)/count as u64;
+            for (i,w) in windows.iter().enumerate() {
+                assert_eq!(w.0+w.1,duration,"Every automatic card must remain until scene end");
+                if i+1<count {
+                    assert!(w.2.is_some());
+                    assert!((windows[i+1].0-w.0).abs_diff(expected)<=1,"Entrances must remain evenly spaced");
+                    assert!(w.0+w.1>windows[i+1].0+100,"Previous card must survive the next entrance");
+                } else {assert_eq!(w.2,None);}
+            }
+        }}
+        let seg=Segment{duration_ms:20000,..Default::default()};
+        let manual=EvidenceItem{timing_manual:true,start_ms:7000,duration_ms:1800,..Default::default()};
+        let automatic=EvidenceItem::default();
+        assert_eq!(stack_windows(&seg,&[&automatic,&manual])[1],(7000,1800,None));
+    }
+
+    #[test]
+    fn upgrade_reschedules_only_automatic_unlocked_layers() {
+        use crate::{composition::Composition,timeline};
+        let mut p=Project::default();
+        p.segments.push(Segment{id:"host".into(),kind:"host".into(),duration_ms:30000,
+            evidence_items:(0..3).map(|i|EvidenceItem{id:format!("e{i}"),asset:Some(format!("{i}.png").into()),..Default::default()}).collect(),..Default::default()});
+        p.ensure_composition();
+        let comp=p.composition.as_mut().unwrap();comp.script_key="old-layout-key".into();
+        for c in &mut comp.clips {if c.track==timeline::EVIDENCE {
+            c.start_ms=500;c.duration_ms=1000;
+            if c.evidence_id.as_deref()==Some("e1") {c.timing_manual=true;}
+            if c.evidence_id.as_deref()==Some("e2") {c.locked=true;}
+        }}
+        p.ensure_composition();
+        let comp=p.composition.as_ref().unwrap();
+        for c in comp.clips.iter().filter(|c|c.track==timeline::EVIDENCE) {
+            if c.evidence_id.as_deref()==Some("e0") {assert!(c.duration_ms>9000);assert!(c.motion.zoom);}
+            else {assert_eq!((c.start_ms,c.duration_ms),(500,1000));}
+        }
+        assert_eq!(comp.script_key,Composition::key(&p));
+    }
+
+    #[test]
+    fn real_export_keeps_both_moving_cards_and_audible_whoosh() {
+        use crate::{composition::{self,Composition},timeline};
+        use rodio::Source as _;
+        let temp=tempfile::tempdir().unwrap();
+        let root=std::env::var_os("AIR3VIEW_STACK_QA").map(PathBuf::from).unwrap_or_else(||temp.path().into());
+        fs::create_dir_all(&root).unwrap();
+        for (file,color) in [("first.png",[20,220,60,255]),("second.png",[230,30,20,255])] {
+            RgbaImage::from_pixel(800,600,Rgba(color)).save(root.join(file)).unwrap();
+        }
+        let mut p=Project{root:root.clone(),..Default::default()};
+        p.output.resolution=360;p.output.fps=24;p.subtitles.enabled=false;
+        p.sources.push(Source{id:"src".into(),duration_ms:6000,..Default::default()});
+        p.segments.push(Segment{id:"host".into(),kind:"host".into(),duration_ms:6000,
+            evidence_items:vec![EvidenceItem{id:"first".into(),source_id:"src".into(),kind:"fact".into(),value:"1".into(),proof:Proof{quote:"First source frame".into(),..Default::default()},asset:Some("first.png".into()),..Default::default()},
+                EvidenceItem{id:"second".into(),source_id:"src".into(),kind:"stat".into(),value:"2".into(),proof:Proof{quote:"Second source frame".into(),..Default::default()},asset:Some("second.png".into()),..Default::default()}],..Default::default()});
+        let mut comp=Composition::from_project(&p);
+        comp.clips.retain(|c|matches!(c.track,timeline::EVIDENCE|timeline::SFX));p.composition=Some(comp);
+        let cards:Vec<_>=p.composition.as_ref().unwrap().clips.iter().filter(|c|c.track==timeline::EVIDENCE).collect();
+        assert!(cards[1].z>cards[0].z);
+        for card in &cards {
+            assert!(card.active(4000)&&card.active(5200));
+            assert_ne!(composition::evaluated(&p,card,4000).width,composition::evaluated(&p,card,5200).width,"Both cards must keep moving");
+        }
+        let settings=Settings{encoder:"libx264".into(),..Default::default()};let cancel=process::cancel_token();
+        let output=root.join("stack-whoosh.mp4");crate::layer_media::export(&p,&settings,&output,&cancel).unwrap();
+        for ms in [4000,5200] {
+            let png=root.join(format!("both-{ms}.png"));
+            process::run(&settings.ffmpeg,&["-y".into(),"-v".into(),"error".into(),"-ss".into(),format!("{}",ms as f64/1000.),"-i".into(),output.to_string_lossy().into_owned(),"-frames:v".into(),"1".into(),png.to_string_lossy().into_owned()],None,&cancel,Duration::from_secs(30),None).unwrap();
+            let frame=image::open(png).unwrap().to_rgb8();
+            assert!(frame.pixels().filter(|p|p[1]>65&&p[1] as u16>p[0] as u16*2&&p[1] as u16>p[2] as u16*2).count()>500,"Earlier card disappeared in actual MP4");
+            assert!(frame.pixels().filter(|p|p[0]>140&&p[1]<80&&p[2]<80).count()>10000,"New card must be on top and readable");
+        }
+        let wav=root.join("whoosh-decoded.wav");
+        process::run(&settings.ffmpeg,&["-y".into(),"-v".into(),"error".into(),"-i".into(),output.to_string_lossy().into_owned(),"-vn".into(),"-ac".into(),"1".into(),"-ar".into(),"48000".into(),"-c:a".into(),"pcm_s16le".into(),wav.to_string_lossy().into_owned()],None,&cancel,Duration::from_secs(30),None).unwrap();
+        let samples=rodio::Decoder::new(std::io::BufReader::new(fs::File::open(wav).unwrap())).unwrap().convert_samples::<f32>().collect::<Vec<_>>();
+        let rms=|a:usize,b:usize|(samples[a*48..b*48].iter().map(|x|x*x).sum::<f32>()/((b-a)*48) as f32).sqrt();
+        assert!(rms(150,400)>0.02&&rms(3100,3350)>0.02,"Whoosh must be audible at both entrances, including fact/stat photos");
+        assert!(rms(5500,5900)<0.0001,"No ending SFX may be introduced");
+        p.save().unwrap();
+    }
+
+    /// Compare actual FFmpeg pixels against the preview evaluator, including
+    /// chunk seeks caused by another layer's entrance. No network/providers.
+    #[test]
+    fn rendered_zoom_and_drift_match_preview_in_both_aspects() {
+        use crate::{composition::{self,Composition},timeline};
+        let temp=tempfile::tempdir().unwrap();let cancel=process::cancel_token();let settings=Settings::default();
+        for portrait in [true,false] {for (motion,card_height) in [("zoom",600),("drift",280)] {
+            let root=temp.path().join(format!("{portrait}-{motion}"));fs::create_dir_all(&root).unwrap();
+            let file=root.join("card.png");RgbaImage::from_pixel(800,card_height,Rgba([20,200,60,255])).save(&file).unwrap();
+            let mut p=Project{root:root.clone(),..Default::default()};
+            p.output.portrait=portrait;p.output.resolution=360;p.output.fps=24;
+            p.evidence_settings.motion=motion.into();p.evidence_settings.sound_enabled=false;
+            p.segments.push(Segment{id:"host".into(),kind:"host".into(),duration_ms:3000,
+                evidence_items:vec![EvidenceItem{id:"e".into(),source_id:"src".into(),asset:Some("card.png".into()),transition:"none".into(),..Default::default()}],..Default::default()});
+            p.sources.push(Source{id:"src".into(),duration_ms:3000,..Default::default()});
+            let mut comp=Composition::from_project(&p);comp.clips.retain(|c|c.track==timeline::EVIDENCE);
+            // An annotation-like transparent layer forces a mid-motion cut.
+            let mut marker=comp.clips[0].clone();marker.id="cut".into();marker.start_ms=1500;marker.duration_ms=1500;marker.transform.opacity=0.;comp.clips.push(marker);
+            p.composition=Some(comp);let output=root.join("output.mp4");
+            crate::layer_media::export(&p,&settings,&output,&cancel).unwrap();
+            let (w,h)=p.output.dimensions();
+            for ms in [500,2500] {
+                let png=root.join(format!("frame-{ms}.png"));
+                process::run(&settings.ffmpeg,&["-y".into(),"-v".into(),"error".into(),"-ss".into(),format!("{}",ms as f64/1000.),"-i".into(),output.to_string_lossy().into_owned(),"-frames:v".into(),"1".into(),png.to_string_lossy().into_owned()],None,&cancel,Duration::from_secs(30),None).unwrap();
+                let img=image::open(png).unwrap().to_rgb8();let pts:Vec<_>=img.enumerate_pixels().filter(|(_,_,v)|v[1]>130&&v[0]<80&&v[2]<110).map(|(x,y,_)|(x,y)).collect();
+                let bounds=[pts.iter().map(|v|v.0).min().unwrap() as f32,pts.iter().map(|v|v.1).min().unwrap() as f32,pts.iter().map(|v|v.0).max().unwrap() as f32,pts.iter().map(|v|v.1).max().unwrap() as f32];
+                let clip=&p.composition.as_ref().unwrap().clips[0];let t=composition::evaluated(&p,clip,ms);
+                let expected=[(t.x-t.width/2.)*w as f32,(t.y-t.height/2.)*h as f32,(t.x+t.width/2.)*w as f32,(t.y+t.height/2.)*h as f32];
+                for (actual,expected) in bounds.into_iter().zip(expected) {assert!((actual-expected).abs()<3.,"{portrait} {motion} at {ms}: actual {bounds:?}, preview {expected}");}
+            }
+        }}
+    }
 }
 fn card(
     item: &EvidenceItem,
@@ -1003,10 +1151,17 @@ fn card(
     second: Option<&RgbaImage>,
     language: &str,
 ) -> Result<(RgbaImage, RgbaImage)> {
-    let mut img = RgbaImage::new(800, 600);
-    let mut ann = RgbaImage::new(800, 600);
+    let data_card=matches!(item.kind.as_str(),"stat"|"fact");
+    let photo_height=if let Some(second)=second {
+        (370.*(first.height() as f32/first.width().max(1) as f32)
+            .max(second.height() as f32/second.width().max(1) as f32)).round()
+    }else{(760.*first.height() as f32/first.width().max(1) as f32).round()}.clamp(120.,840.) as u32;
+    let photo_bottom=82+photo_height;
+    let height=photo_bottom+if data_card{116}else if second.is_some(){76}else{48};
+    let mut img = RgbaImage::new(800, height);
+    let mut ann = RgbaImage::new(800, height);
     let f = font()?;
-    for y in 0u32..600 {
+    for y in 0u32..height {
         for x in 0u32..800 {
             let dx = if x < 24 {
                 24 - x
@@ -1016,7 +1171,7 @@ fn card(
             let dy = if y < 24 {
                 24 - y
             } else {
-                y.saturating_sub(575)
+                y.saturating_sub(height-25)
             } as f32;
             if dx * dx + dy * dy <= 24. * 24. {
                 img.put_pixel(x, y, Rgba([255, 255, 255, 255]));
@@ -1030,43 +1185,46 @@ fn card(
         24.,
         18.,
         750.,
-        34.,
+        28.,
         2,
         [24, 30, 36, 255],
     );
-    let rect = if matches!(item.kind.as_str(), "stat" | "fact") {
+    let rect = if data_card {
+        // The source frame is the primary evidence, including for fact/stat
+        // cards. Keep its full aspect ratio and put compact text underneath.
+        let rect=paste(&mut img, first, [20, 82, 760, photo_height]);
         text(
             &mut img,
             &f,
             &format!("{} {}", item.value, item.unit),
-            28.,
-            90.,
+            24.,
+            photo_bottom as f32+8.,
             740.,
-            46.,
-            2,
+            30.,
+            1,
             [227, 81, 50, 255],
         );
         text(
             &mut img,
             &f,
             if crate::content_language::english(language) { &item.claim } else { &item.proof.quote },
-            28.,
-            212.,
+            24.,
+            photo_bottom as f32+48.,
             740.,
-            28.,
-            2,
+            19.,
+            1,
             [50, 60, 70, 255],
         );
-        paste(&mut img, first, [24, 292, 752, 206])
+        rect
     } else if let Some(second) = second {
-        let rect = paste(&mut img, first, [24, 95, 365, 410]);
-        paste(&mut img, second, [411, 95, 365, 410]);
+        let rect = paste(&mut img, first, [20, 82, 370, photo_height]);
+        paste(&mut img, second, [410, 82, 370, photo_height]);
         text(
             &mut img,
             &f,
             &format!("A · {}", time(item.source_time_ms)),
             28.,
-            512.,
+            photo_bottom as f32+8.,
             360.,
             20.,
             1,
@@ -1077,7 +1235,7 @@ fn card(
             &f,
             &format!("B · {}", time(item.second_time_ms.unwrap())),
             412.,
-            512.,
+            photo_bottom as f32+8.,
             360.,
             20.,
             1,
@@ -1085,32 +1243,22 @@ fn card(
         );
         rect
     } else {
-        paste(&mut img, first, [24, 90, 752, 445])
+        paste(&mut img, first, [20, 82, 760, photo_height])
     };
     text(
         &mut img,
         &f,
-        &format!("{} · {}", item.source_id, time(item.source_time_ms)),
+        &format!("{} · {}{}", item.source_id, time(item.source_time_ms),
+            if matches!(item.kind.as_str(), "stat" | "fact") && !item.proof.confirmed {
+                crate::content_language::text(language," · CẦN ĐỐI CHIẾU"," · VERIFY WITH SOURCE")
+            }else{""}),
         24.,
-        560.,
+        height as f32-26.,
         750.,
-        20.,
+        16.,
         1,
         [80, 90, 100, 255],
     );
-    if matches!(item.kind.as_str(), "stat" | "fact") && !item.proof.confirmed {
-        text(
-            &mut img,
-            &f,
-            crate::content_language::text(language,"CẦN ĐỐI CHIẾU","VERIFY WITH SOURCE"),
-            28.,
-            510.,
-            540.,
-            22.,
-            1,
-            [180, 70, 25, 255],
-        );
-    }
     for a in &item.annotations {
         let point = |v: [f32; 2]| [rect[0] + v[0] * rect[2], rect[1] + v[1] * rect[3]];
         let from = point(a.from);
@@ -1169,6 +1317,7 @@ pub struct Motion {
     pub kind: String,
     pub duration_ms: u64,
     pub zoom: bool,
+    pub drift: bool,
     pub delay_ms: u64,
     pub backdrop_ms: Option<u64>,
 }
@@ -1179,11 +1328,22 @@ impl Motion {
         t.y += shift / output_h as f32;
         t.width *= zoom;
         t.height *= zoom;
+        let progress=self.progress(local);
+        if self.drift {t.x+=0.012*progress;t.y-=0.008*progress;}
         let f=self.retreat(local);
         t.x-=0.065*f;t.y-=0.018*f;
         if self.blurred(local) {t.opacity*=0.55;}
     }
     pub fn blurred(&self,local:u64)->bool {self.backdrop_ms.is_some_and(|at|local>=at)}
+    fn progress(&self,local:u64)->f32 {
+        let x=(local as f32/self.duration_ms.max(1) as f32).clamp(0.,1.);
+        x*x*(3.-2.*x)
+    }
+    pub fn drift_expression(&self,cue:u64,clock:&str)->String {
+        if !self.drift{return "0".into();}
+        let x=format!("min(max(({clock}+{})/{},0),1)",cue as f64/1000.,self.duration_ms.max(1) as f64/1000.);
+        format!("({x}*{x}*(3-2*{x}))")
+    }
     pub fn retreat(&self,local:u64)->f32 {
         self.backdrop_ms.map(|at|{let x=(local.saturating_sub(at) as f32/300.).clamp(0.,1.);x*x*(3.-2.*x)}).unwrap_or(0.)
     }

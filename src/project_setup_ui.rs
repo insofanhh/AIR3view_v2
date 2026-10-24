@@ -547,10 +547,11 @@ impl StudioApp {
     fn setup_sources(&mut self, ui: &mut egui::Ui) {
         panel().inner_margin(12).show(ui,|ui| {
             heading(ui,"05 / VIDEO NGUỒN");
-            muted(ui,"Dán URL YouTube, mỗi dòng một video. Cấu hình phía trên đã được lưu cho lần sau.");
-            let edit=ui.add(egui::TextEdit::multiline(&mut self.urls).desired_width(f32::INFINITY).desired_rows(3).hint_text("https://www.youtube.com/watch?v=..."));
+            self.batch_mode_ui(ui);
+            let edit=ui.add(egui::TextEdit::multiline(&mut self.urls).desired_width(f32::INFINITY).desired_rows(2).hint_text("URL YouTube, mỗi dòng một video"));
             #[cfg(test)] self.hitboxes.insert("setup_urls".into(),edit.rect);
             if edit.changed(){self.project.input_urls=self.urls.clone();}
+            if self.batch_view.prefs.enabled{self.batch_options_ui(ui);self.batch_sources_ui(ui);return;}
             if ui.button("+ Video từ máy…").clicked(){self.import_dialog();}
             match self.planned_sources() {
                 Err(e)=>{ui.colored_label(Color32::LIGHT_RED,format!("{e:#}"));}
@@ -584,6 +585,7 @@ impl StudioApp {
         });
     }
     fn setup_run_bar(&mut self, ui: &mut egui::Ui) {
+        if self.batch_view.prefs.enabled{self.batch_run_bar(ui);return;}
         let production = self.project.production.as_ref();
         muted(
             ui,

@@ -16,9 +16,6 @@ impl CardSoundSettings {
         Ok(())
     }
 }
-pub fn sound(index:usize,kind:&str)->Option<(PathBuf,u64)> {
-    selected_sound("auto",index,kind)
-}
 pub fn selected_sound(style:&str,index:usize,kind:&str)->Option<(PathBuf,u64)> {
     static LIBRARY:OnceLock<Vec<Option<(PathBuf,u64)>>>=OnceLock::new();
     let library=LIBRARY.get_or_init(||{
@@ -57,6 +54,65 @@ mod tests {
             GraphicCue{kind:"title".into(),start_ms:2400,end_ms:3800,label:"Reaction".into(),..Default::default()}
         ],..Default::default()}];
         p
+    }
+
+    fn shortened_speech_project()->Project {
+        let mut p=project();
+        let mut voice=p.segments.remove(0);
+        voice.duration_ms=8000;
+        voice.graphics[0].start_ms=1600;voice.graphics[0].end_ms=4000;
+        voice.graphics[1].start_ms=6000;voice.graphics[1].end_ms=7800;
+        p.segments=vec![Segment{id:"intro".into(),kind:"host".into(),duration_ms:8000,..Default::default()},voice];
+        p.ensure_composition();
+        // Speech checkpoints shorten both a preceding scene and this scene.
+        p.segments[0].duration_ms=3000;p.segments[1].duration_ms=4000;
+        p.segments[1].graphics[0].start_ms=800;p.segments[1].graphics[0].end_ms=2000;
+        p.segments[1].graphics[1].start_ms=2400;p.segments[1].graphics[1].end_ms=3800;
+        p
+    }
+
+    #[test]
+    fn tts_duration_changes_reanchor_automatic_sounds_and_legacy_tail() {
+        let mut p=shortened_speech_project();
+        p.rendered=Some("old-output-with-tail.mp4".into());
+        let before=serde_json::to_vec(&p.segments).unwrap();
+        let last=p.composition.as_ref().unwrap().clips.iter().rfind(|c|c.track==timeline::SFX).unwrap();
+        assert_eq!(last.start_ms,14000,"Fixture must reproduce the stale tail");
+        p.ensure_composition();
+        assert!(p.rendered.is_none(),"The old exported tail must not remain selected as current output");
+        assert_eq!(p.composition_duration(),7000,"Automatic SFX must not extend video beyond its picture/voice");
+        let sounds:Vec<_>=p.composition_snapshot().clips.into_iter().filter(|c|c.track==timeline::SFX).collect();
+        assert_eq!(sounds.iter().map(|c|c.start_ms).collect::<Vec<_>>(),vec![3800,5400]);
+        assert_eq!(before,serde_json::to_vec(&p.segments).unwrap(),"Repair must preserve the approved editorial cuts and narration");
+        // Old project files can have the stale absolute times with a saved key.
+        p.composition.as_mut().unwrap().clips.iter_mut().find(|c|c.id==sounds[1].id).unwrap().start_ms=14000;
+        p.composition.as_mut().unwrap().script_key="evidence-even-windows-adaptive-v3".into();
+        p.ensure_composition();assert_eq!(p.composition_duration(),7000);
+        // Intentional SFX trims/moves, gain and visibility remain user edits.
+        let c=p.composition.as_mut().unwrap().clips.iter_mut().find(|c|c.id==sounds[1].id).unwrap();
+        c.start_ms=5500;c.duration_ms=100;c.media_in_ms=30;c.timing_manual=true;c.gain=0.7;c.visible=false;
+        p.card_sound.style="pop".into();p.ensure_composition();
+        let c=p.composition.as_ref().unwrap().clips.iter().find(|c|c.id==sounds[1].id).unwrap();
+        assert_eq!((c.start_ms,c.duration_ms,c.media_in_ms),(5500,100,30));assert_eq!(c.gain,0.7);assert!(!c.visible);
+    }
+
+    #[test]
+    fn real_export_after_shorter_speech_has_no_late_sound_or_black_tail() {
+        use rodio::Source;
+        let temp=tempfile::tempdir().unwrap();let mut p=shortened_speech_project();p.root=temp.path().into();
+        p.output.resolution=360;p.output.fps=24;p.subtitles.enabled=false;
+        p.timeline.tracks[timeline::AVATAR].muted=true;p.ensure_composition();
+        let s=Settings{encoder:"libx264".into(),..Default::default()};let cancel=process::cancel_token();
+        let output=p.root.join("fixed.mp4");crate::layer_media::export(&p,&s,&output,&cancel).unwrap();
+        let info=crate::media::probe(&s,&output,&cancel).unwrap();assert!(info.duration_ms.abs_diff(7000)<100);
+        let wav=p.root.join("audio.wav");
+        process::run(&s.ffmpeg,&["-y".into(),"-v".into(),"error".into(),"-i".into(),output.to_string_lossy().into_owned(),"-vn".into(),"-ac".into(),"1".into(),"-ar".into(),"48000".into(),"-c:a".into(),"pcm_s16le".into(),wav.to_string_lossy().into_owned()],None,&cancel,std::time::Duration::from_secs(30),None).unwrap();
+        let samples=rodio::Decoder::new(std::io::BufReader::new(std::fs::File::open(wav).unwrap())).unwrap().convert_samples::<f32>().collect::<Vec<_>>();
+        let rms=|a:usize,b:usize|(samples[a*48..b*48].iter().map(|x|x*x).sum::<f32>()/((b-a)*48) as f32).sqrt();
+        assert!(rms(3810,3980)>0.001&&rms(5410,5580)>0.001,"SFX must remain audible at the actual card entrances");
+        assert!(rms(6200,6950)<0.0001,"No added ending sound is allowed");
+        let end=p.composition_duration();let (args,_)=crate::layer_media::audio_args(&p,end-1000,end);
+        assert!(args.iter().any(|a|a.starts_with("anullsrc")),"Preview's final interval must also be silent without a card entrance");
     }
 
     #[test]

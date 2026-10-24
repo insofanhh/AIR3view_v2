@@ -2,7 +2,7 @@ use super::*;
 use crate::updates::Status;
 impl StudioApp {
     fn update_button(&mut self, ui: &mut egui::Ui, tag: &str, download: &str, checksum: &str) {
-        let response = ui.add_enabled(!self.updates.installer.active && !self.busy, egui::Button::new("Cập nhật"));
+        let response = ui.add_enabled(!self.updates.installer.active && !self.busy && !self.batch_view.active && !self.batch_view.creating, egui::Button::new("Cập nhật"));
         #[cfg(test)]
         self.hitboxes.insert("install_update".into(), response.rect);
         if response.on_hover_text("Tự tải, kiểm tra, cài vào thư mục hiện tại và mở lại AIR3view. Chờ tác vụ đang chạy hoàn tất trước khi cập nhật.").clicked() {
@@ -34,7 +34,7 @@ impl StudioApp {
             }
             return;
         }
-        if self.busy { return; }
+        if self.busy || self.batch_view.active || self.batch_view.creating { return; }
         let result = (|| -> anyhow::Result<_> {
             if self.dirty { self.project.save()?; self.dirty = false; }
             self.remember_project_defaults()?;

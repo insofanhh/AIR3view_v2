@@ -4,7 +4,7 @@ use crate::{composition::*, model::*, process::{self,Cancel}, timeline};
 use anyhow::{Context,Result};
 use std::{fs,path::{Path,PathBuf},time::{Duration,Instant}};
 
-const RENDERER: &str = "composition-v6-direct-caption-shared-decode";
+const RENDERER: &str = "composition-v7-evidence-motion";
 
 fn visual_output(p:&Project)->OutputSettings {
     let mut output=p.output.clone();
@@ -296,7 +296,8 @@ fn export_interval(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,end:u64,fr
         let shift=clip.motion.shift_expression(clip.cue_in_ms);
         let shift=shift.replace("(t+",&format!("(t-{start}+"));
         let retreat=clip.motion.retreat_expression(clip.cue_in_ms,&format!("(t-{start})"));
-        graph.push(format!("[base{}][layer{n}]overlay=x='{}-w/2{shake}-{}*({retreat})':y='{}-h/2{shift}-{}*({retreat})':enable='gte(t,{start:.6})*lt(t,{stop:.6})':eof_action=pass:repeatlast=0:format=auto[base{n}]",n-1,t.x*w as f32,0.065*w as f32,t.y*h as f32,0.018*h as f32));
+        let drift=clip.motion.drift_expression(clip.cue_in_ms,&format!("(t-{start})"));
+        graph.push(format!("[base{}][layer{n}]overlay=x='{}-w/2{shake}-{}*({retreat})+{}*({drift})':y='{}-h/2{shift}-{}*({retreat})-{}*({drift})':enable='gte(t,{start:.6})*lt(t,{stop:.6})':eof_action=pass:repeatlast=0:format=auto[base{n}]",n-1,t.x*w as f32,0.065*w as f32,0.012*w as f32,t.y*h as f32,0.018*h as f32,0.008*h as f32));
     }
     for (i,(_,count)) in inputs.iter().enumerate() {
         let input=i+1;

@@ -107,7 +107,7 @@ impl Composition {
     pub fn duration_ms(&self)->u64 { self.clips.iter().map(LayerClip::end).max().unwrap_or(0) }
     pub fn key(p:&Project)->String {
         // Transforms are intentionally absent; adjusting them never rebuilds assets.
-        media::hash(serde_json::to_vec(&("card-sfx-v1",&p.segments,&p.evidence_settings,&p.card_sound.style)).unwrap_or_default())
+        media::hash(serde_json::to_vec(&("evidence-persistent-stack-whoosh-v5",&p.segments,&p.evidence_settings,&p.card_sound.style)).unwrap_or_default())
     }
     pub fn from_project(p:&Project)->Self {
         let (w,h)=p.output.dimensions(); let (w,h)=(w as f32,h as f32);
@@ -166,7 +166,7 @@ impl Composition {
             if p.evidence_settings.enabled {
                 let items:Vec<_>=s.evidence_items.iter().filter(|e|e.enabled).collect();
                 let stack=p.evidence_settings.presentation=="stack"&&s.kind=="host";
-                let windows=crate::evidence::stack_windows(s,&items,p.evidence_settings.density);
+                let windows=crate::evidence::stack_windows(s,&items);
                 let mut ends=vec![0u64;p.evidence_settings.density];
                 for (index,item) in items.iter().enumerate() {
                     let (cue,duration)=if stack {(windows[index].0,windows[index].1)}else{crate::evidence::window(s,item)};let group=format!("{}:ev:{}",s.id,item.id);
@@ -175,16 +175,19 @@ impl Composition {
                     let reserve=((items.len()-index-1)/p.evidence_settings.density) as u64*(500.min(s.duration_ms/items.len().max(1) as u64));
                     let cue=if stack{cue}else{cue.max(ends[lane])};if cue+100>s.duration_ms{continue;}
                     let duration=duration.min(s.duration_ms.saturating_sub(cue+if stack{0}else{reserve})).max(1);ends[lane]=cue+duration;
-                    let transform=if stack{crate::evidence::stack_layout(p,index)}else{crate::evidence::layout(p,if index>=p.evidence_settings.density{lane}else{index},items.len().min(p.evidence_settings.density),&item.slot)};
+                    let mut transform=if stack{crate::evidence::stack_layout(p,index)}else{crate::evidence::layout(p,if index>=p.evidence_settings.density{lane}else{index},items.len().min(p.evidence_settings.density),&item.slot)};
+                    if let Some((cw,ch))=item.asset.as_ref().and_then(|a|image::image_dimensions(p.root.join(a)).ok()) {
+                        transform.contain_aspect(ch as f32/cw.max(1) as f32,w as u32,h as u32);
+                    }
                     for (track,asset) in [(timeline::EVIDENCE,&item.asset),(timeline::ANNOTATION,&item.annotation_asset)] {
                         let Some(asset)=asset else{continue;};let motion_duration=item.motion_duration_ms.max(item.motion_in_ms+duration);
                         let reveal=if track==timeline::ANNOTATION{150.min(motion_duration/3)}else{0};
                         let delay=reveal.saturating_sub(item.motion_in_ms);if delay>=duration{continue;}
                         let kind=if stack&&item.transition=="slide_fade"{"stack_pop".into()}else{item.transition.clone()};
-                        result.clips.push(LayerClip{id:format!("{group}:{track}"),scene_id:s.id.clone(),track,start_ms:start+cue+delay,duration_ms:duration-delay,media_in_ms:0,cue_in_ms:item.motion_in_ms+delay,media:Some(p.root.join(asset)),proxy:None,transform:transform.clone(),z:if stack{11+index as i32*2+if track==timeline::ANNOTATION{1}else{0}}else{timeline::TRACK_ROLES[track].z()},visible:true,locked:false,linked:false,gain:1.,fade_in_ms:0,fade_out_ms:0,evidence_id:Some(item.id.clone()),group:Some(group.clone()),motion:crate::evidence::Motion{kind,duration_ms:motion_duration,zoom:item.zoom,delay_ms:reveal,backdrop_ms:if stack{windows[index].2.map(|t|t+item.motion_in_ms)}else{None}},timing_manual:false});
+                        result.clips.push(LayerClip{id:format!("{group}:{track}"),scene_id:s.id.clone(),track,start_ms:start+cue+delay,duration_ms:duration-delay,media_in_ms:0,cue_in_ms:item.motion_in_ms+delay,media:Some(p.root.join(asset)),proxy:None,transform:transform.clone(),z:if stack{11+index as i32*2+if track==timeline::ANNOTATION{1}else{0}}else{timeline::TRACK_ROLES[track].z()},visible:true,locked:false,linked:false,gain:1.,fade_in_ms:0,fade_out_ms:0,evidence_id:Some(item.id.clone()),group:Some(group.clone()),motion:crate::evidence::Motion{kind,duration_ms:motion_duration,zoom:item.zoom||p.evidence_settings.motion=="zoom",drift:p.evidence_settings.motion=="drift",delay_ms:reveal,backdrop_ms:if stack{windows[index].2.map(|t|t+item.motion_in_ms)}else{None}},timing_manual:false});
                     }
                     if item.motion_in_ms==0&&item.asset.is_some() {
-                        if let Some((path,sound_duration))=crate::evidence_sfx::sound(index,&item.kind){
+                        if let Some((path,sound_duration))=crate::evidence_sfx::selected_sound(&p.evidence_settings.sound_style,index,&item.kind){
                             result.clips.push(LayerClip{id:format!("{group}:{}",timeline::SFX),scene_id:s.id.clone(),track:timeline::SFX,start_ms:start+cue,duration_ms:sound_duration.min(duration).max(1),media_in_ms:0,cue_in_ms:0,media:Some(path),proxy:None,transform:Transform::default(),z:0,visible:true,locked:false,linked:false,gain:p.evidence_settings.sound_gain,fade_in_ms:5,fade_out_ms:40,evidence_id:Some(item.id.clone()),group:Some(group.clone()),motion:Default::default(),timing_manual:false});
                         }
                     }
@@ -193,6 +196,11 @@ impl Composition {
             start+=s.duration_ms;
         }
         p.layer_defaults.apply(p, &mut result);
+        if !p.layer_defaults.free_aspect {for c in result.clips.iter_mut().filter(|c|matches!(c.track,timeline::EVIDENCE|timeline::ANNOTATION)) {
+            if let Some((cw,ch))=c.media.as_ref().and_then(|a|image::image_dimensions(a).ok()) {
+                c.transform.contain_aspect(ch as f32/cw.max(1) as f32,w as u32,h as u32);
+            }
+        }}
         result
     }
     pub fn validate(&self)->Result<()> {
@@ -347,6 +355,7 @@ impl Project {
         }
         if self.composition.as_ref().is_none_or(|c|c.version<4||c.script_key!=Composition::key(self)) {
             let mut new=Composition::from_project(self);
+            let mut repaired_sounds=false;
             // Re-analysis changes the script key. Preserve placement for unchanged
             // scene IDs, but use fresh media and timing from the new assets.
             if let Some(old)=&self.composition {
@@ -364,13 +373,29 @@ impl Project {
                         let mut legacy=Transform::default();let (w,h)=self.output.dimensions();legacy.contain_aspect(avatar_aspect(prior.media.as_deref()),w,h);
                         prior.transform!=legacy||!prior.editable(self)
                     }else{true};
-                    if preserve{c.transform=prior.transform.clone();}
+                    if preserve{
+                        c.transform=prior.transform.clone();
+                        // Newly rasterized evidence cards follow the photo's
+                        // aspect instead of stretching into their old 4:3 box.
+                        if c.media!=prior.media && matches!(c.track,timeline::EVIDENCE|timeline::ANNOTATION) && !self.layer_defaults.free_aspect {
+                            if let Some((cw,ch))=c.media.as_ref().and_then(|a|image::image_dimensions(a).ok()) {
+                                let (w,h)=self.output.dimensions();c.transform.contain_aspect(ch as f32/cw.max(1) as f32,w,h);
+                            }
+                        }
+                    }
                     if !automatic_upgrade {c.z=prior.z;}c.visible=prior.visible;
                     c.locked=prior.locked;c.linked=prior.linked;
                     if prior.group.is_some() || c.track!=timeline::GRAPHICS {c.group=prior.group.clone();}c.timing_manual=prior.timing_manual;
                     if prior.timing_manual {c.motion=prior.motion.clone();}
                     if c.track==timeline::SFX || c.background_original(self) {c.gain=prior.gain;}
-                    if !prior.linked && (prior.evidence_id.is_none()||prior.timing_manual) {c.start_ms=prior.start_ms;c.duration_ms=prior.duration_ms;c.media_in_ms=prior.media_in_ms;c.cue_in_ms=prior.cue_in_ms;}
+                    // Entrance sounds are generated from the current card cues.
+                    // Their old absolute times become stale after TTS shortens
+                    // a preceding scene or rescales the card within this scene.
+                    // Only a deliberate timing edit makes SFX independent.
+                    let automatic_sound=c.track==timeline::SFX&&!prior.timing_manual;
+                    repaired_sounds|=automatic_sound&&(c.start_ms!=prior.start_ms||c.duration_ms!=prior.duration_ms||c.media_in_ms!=prior.media_in_ms||c.media!=prior.media);
+                    repaired_sounds|=c.evidence_id.is_some()&&!prior.timing_manual&&(c.start_ms!=prior.start_ms||c.duration_ms!=prior.duration_ms);
+                    if !automatic_sound && !prior.linked && (prior.evidence_id.is_none()||prior.timing_manual) {c.start_ms=prior.start_ms;c.duration_ms=prior.duration_ms;c.media_in_ms=prior.media_in_ms;c.cue_in_ms=prior.cue_in_ms;}
                 } }
                 for clip in old.clips.iter().filter(|c|!c.linked) {
                     if !new.clips.iter().any(|c|c.id==clip.id) && !clip.id.contains(":gfx:") && (clip.evidence_id.is_none()||!clip.id.contains(":ev:")) && self.segments.iter().any(|s|s.id==clip.scene_id&&clip.evidence_id.as_ref().is_none_or(|id|self.evidence_settings.enabled&&s.evidence_items.iter().any(|e|&e.id==id&&e.enabled&&(clip.track!=timeline::ANNOTATION||e.annotation_asset.is_some())))) {new.clips.push(clip.clone());}
@@ -378,6 +403,7 @@ impl Project {
                 new.removed=old.removed.clone();new.clips.retain(|c|!new.removed.contains(&c.id));
             }
             self.composition=Some(new);
+            if repaired_sounds {self.rendered=None;}
         }
         // Evidence metadata is portable: resolve relative assets against the
         // loaded project root even when its unchanged script key is reused.

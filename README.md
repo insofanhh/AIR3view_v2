@@ -1,6 +1,6 @@
 # AIR3view
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.4. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.5. Preview, timeline và các layer nằm ngay trong app.
 
 ## Khởi chạy
 
@@ -69,14 +69,31 @@ Script tạo audio tiếng Anh thật, nhận dạng batch với ngôn ngữ c�
 
 Tác vụ có checkpoint. Sau lỗi/mở lại app, dùng **Tiếp tục bước dang dở** để dùng lại tài nguyên đã tạo. Đổi nguồn hoặc yêu cầu kịch bản thì tạo mới.
 
+### Hàng loạt: mỗi URL một dự án
+
+1. Trong **Thiết lập dự án → Video nguồn**, chọn **Hàng loạt · mỗi URL một dự án**.
+2. Thiết lập kịch bản, độ dài, hình ảnh, giọng, nhân vật và phụ đề một lần; dán mỗi URL trên một dòng hoặc nhập file `.txt`. Link trùng được gộp; sửa các dòng sai trước khi chạy. Mỗi đợt tối đa 200 URL.
+3. Có thể bỏ chọn URL, đặt tên đợt và bật **Tự xuất MP4**. App dùng thư mục xuất đã nhớ, mỗi dự án có thư mục MP4 riêng.
+4. Bấm **Bắt đầu xử lý hàng loạt**; hoặc **Xếp vào hàng đợi** để chạy sau. Mở **Xử lý hàng loạt** ở menu trái để xem tiến độ từng video, nhật ký và kết quả.
+
+Mỗi URL có project, timeline, media và checkpoint riêng, dùng bản chụp thiết lập lúc tạo đợt; ảnh/giọng tham chiếu được chép vào dự án con. Vùng giữ/loại nguồn cụ thể và timeline của dự án mẫu không được sao chép. Chế độ **Nhiều nguồn · một dự án** vẫn dùng để ghép nhiều URL vào một video.
+
+App xử lý lần lượt một dự án để giới hạn RAM/VRAM. **Tạm dừng sau video hiện tại** chờ video đang chạy xong; **Dừng tác vụ hiện tại** hủy bước hiện tại và tạm dừng đợt. Dùng **Bắt đầu / tiếp tục** để tiếp tục checkpoint; **Thử lại** cho các mục lỗi. Lỗi riêng một URL không chặn URL sau; lỗi cấu hình, xác thực hoặc tài nguyên chung sẽ tạm dừng để xử lý. Lỗi mạng tạm thời được thử lại tối đa một lần sau 30 giây.
+
+**Bỏ khỏi hàng đợi** chỉ bỏ lượt chạy, giữ dữ liệu dự án. Có thể đổi thứ tự các mục đang chờ và mở dự án đã hoàn thành trong khi đợt tiếp tục. Tác vụ nặng thủ công và cài bản cập nhật bị khóa khi hàng đợi chạy. Đóng app sẽ dừng hàng đợi do phiên đó khởi chạy; mở lại và bấm tiếp tục. Không tự xuất lại các mục đã hoàn thành. Khi thử lại bước xuất, MP4 có biên nhận hợp lệ được kiểm tra rồi dùng lại.
+
+Dữ liệu đợt nằm trong `%LOCALAPPDATA%\ReactionStudio\batches\<ID>`: `batch.json`, bản chụp thiết lập, nhật ký và kết quả từng lần chạy. Giữ thư mục này cùng dữ liệu dự án để tiếp tục sau khi khởi động lại.
+
 ## Biên tập
 
 - Timeline có trim, split, sắp xếp cảnh/layer, ẩn/khóa, volume/fade và Undo/Redo. Chỉnh layer/preview không cần encode lại MP4.
-- Thanh công cụ timeline nằm trên một hàng; cửa sổ hẹp có thể cuộn ngang. Nút **SFX** cho phép bật/tắt, chọn Tự động / Whoosh / Pop / Ting và chỉnh âm lượng thẻ thông tin **0–200%**; âm lượng ảnh dẫn chứng có mục riêng. Thiết lập được nhớ cho dự án sau. Âm thanh theo thời điểm thẻ xuất hiện, hỗ trợ preview và xuất MP4; chỉ đổi âm lượng sẽ dùng lại cache hình.
+- Thanh công cụ timeline nằm trên một hàng; cửa sổ hẹp có thể cuộn ngang. Nút **SFX** cho phép bật/tắt, chọn Tự động / Whoosh / Pop / Ting và chỉnh âm lượng thẻ thông tin **0–200%**; ảnh dẫn chứng có lựa chọn Whoosh / Tự động / Pop / Ting và âm lượng riêng (mặc định Whoosh). Thiết lập được nhớ cho dự án sau. Âm thanh theo thời điểm thẻ xuất hiện, hỗ trợ preview và xuất MP4; chỉ đổi âm lượng sẽ dùng lại cache hình.
+- SFX tự động bám theo thời điểm thẻ sau khi giọng TTS làm thay đổi độ dài cảnh; dự án cũ được căn lại khi mở để tránh tiếng hiệu ứng và đuôi đen ngoài phần lời/hình. SFX đã căn tay vẫn giữ thời điểm riêng.
+- Phân tích mới dùng nhịp mặc định: hook theo thiết lập, lời bình một ý/cảnh khoảng 8–14 giây, Host ở điểm phân tích/bước ngoặt và tiếng gốc xen kẽ phân bố theo toàn video. Độ dài cảnh thực tế theo WAV; số đoạn gốc và thời lượng vẫn theo thiết lập dự án, không ép cắt ngang câu để đủ giây.
 - **Cảnh → LAYER → Đồng bộ thông số với các layer cùng loại**: lấy layer đang chọn làm mẫu; bỏ qua layer/nhóm/cảnh khóa. Hình đồng bộ transform/thứ tự, âm thanh đồng bộ gain/fade. Nội dung, nguồn và thời gian clip giữ riêng.
 - Nhân vật kéo thả trong preview hoặc nhập X/Y. Vị trí sub X/Y điều chỉnh ±2000 px theo kích thước đầu ra.
 - Thông số layer tự được nhớ khi lưu/tự lưu, tạo dự án mới hoặc đóng app: X/Y, kích thước, xoay, độ hiện, thứ tự, âm lượng/fade, co giãn tự do và tick đồng bộ. Dự án sau dùng lại theo loại layer và cảnh Host/review riêng; các ảnh dẫn chứng giữ vị trí thứ tự riêng. Media, nội dung, timing, trạng thái khóa/ẩn không được chép sang dự án mới.
-- Ảnh/số liệu dẫn chứng xuất hiện sau Host, có bố cục/chuyển động/SFX. Khi đổi crop %, dùng **Tạo thẻ / cập nhật ảnh dẫn chứng**. Số liệu cần đối chiếu với nguồn.
+- Ảnh/số liệu dẫn chứng xuất hiện sau Host, có bố cục/chuyển động/SFX. Ảnh giữ đúng tỉ lệ trong card; chiều cao card thích ứng với ảnh để giảm khoảng trắng. Bố cục **Thẻ chồng** chia đều thời điểm xuất hiện trên cả cảnh; ảnh sau nằm trên ảnh trước, tất cả giữ đến hết cảnh và tiếp tục chuyển động. Ảnh cũ lùi mờ phía sau; giữ thời điểm căn tay. Chọn **Chuyển động khi hiển thị → Zoom vào nhẹ / Trôi nhẹ / Tĩnh** trong thiết lập dẫn chứng. Với dự án cũ hoặc khi đổi crop %, bấm **Tạo thẻ / cập nhật ảnh dẫn chứng** để tạo lại ảnh theo bố cục mới; giữ nguyên giọng/avatar. Số liệu cần đối chiếu với nguồn.
 - Tiếng gốc nền lấy đoạn review đang chiếu; hook/đoạn gốc xen kẽ có gain riêng. Cảnh Host không tự lấy audio từ đoạn khác.
 - Cache hình được dùng lại khi chỉ sửa âm thanh/metadata. Khi xuất, các thay đổi hình được dựng theo phần bị ảnh hưởng; tốc độ phụ thuộc máy và nội dung.
 - **Nơi lưu / metadata → Metadata video…**: preset AIR3view, mô phỏng CapCut Desktop hoặc tùy chỉnh. Preset mô phỏng không xác nhận video xuất từ CapCut. Có thể đọc/áp metadata vào MP4 có sẵn bằng mux, không encode hình/tiếng.
@@ -96,8 +113,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1 -SkipB
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-source.ps1
 ```
 
-- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.4-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
-- Source sạch: `dist/AIR3view-0.2.4-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
+- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.5-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
+- Source sạch: `dist/AIR3view-0.2.5-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
 - Package dùng danh sách runtime và ghi SHA256 trong `package-manifest.json`. Không sinh bản EXE dự phòng. Có file lạ ở thư mục đích thì script báo lỗi để tránh đưa nhầm vào release.
 - Giữ `Cargo.lock`. Unit test nằm trong module Rust, chỉ biên dịch khi chạy `scripts/build.cmd test --release --lib --locked`; không nằm trong EXE release.
 - `.gitignore` loại build/dist/runtime/dữ liệu local. Không commit key, cookie hay cấu hình cá nhân.
@@ -115,6 +132,9 @@ studio-cli doctor
 studio-cli download <YouTube URL> <folder>
 studio-cli auto-run <project.json>
 studio-cli auto-resume <project.json>
+studio-cli batch-create <template.json> <urls.txt> [output-folder]
+studio-cli batch-run <batch-id>
+studio-cli batch-action <batch-id> <action-json>
 studio-cli prepare <project.json>
 studio-cli script-only|speech|assets|captions|evidence <project.json>
 studio-cli repair-script <project.json> <saved response>
@@ -123,5 +143,7 @@ studio-cli metadata-inspect <input.mp4>
 studio-cli metadata-apply <project.json> <input.mp4> <new-output.mp4>
 studio-cli heygen-preflight
 ```
+
+`batch-create` có thư mục output thì tự xuất MP4; không có thì dừng ở timeline sẵn sàng biên tập. `action-json` có dạng `{"action":"pause"}`, `{"action":"stop"}`, `{"action":"retry_all"}`, hoặc `{"action":"retry","item_id":"<ID>"}`; các thao tác `skip` và `up` cũng dùng `item_id`.
 
 Xem `THIRD_PARTY_NOTICES.md`, `WHATLANG-LICENSE.txt` và giấy phép trong `tools/` trước khi phân phối.

@@ -160,6 +160,9 @@ pub fn uses_directory(project: &Project, root: &Path) -> bool {
 }
 
 pub fn delete(library: &Path, path: &Path, active: Option<&Project>) -> Result<u64> {
+    if let (Some(data),Some(id))=(library.parent(),path.parent().and_then(|p|p.file_name()).and_then(|v|v.to_str())) {
+        ensure!(!crate::batch::reserved_project(data,id),"Dự án đang ở hàng đợi chạy; tạm dừng trước khi xóa");
+    }
     // Recheck on confirmation; do not trust the path/size captured by the dialog.
     let info = inspect(library, path)?;
     for other_path in list(library) {

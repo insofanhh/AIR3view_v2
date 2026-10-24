@@ -7,6 +7,20 @@ fn main() -> Result<()> {
     let s = Settings::default();
     let cancel = process::cancel_token();
     match args.get(1).map(String::as_str) {
+        Some("batch-create")=>{
+            let template=Project::load(Path::new(args.get(2).context("batch-create <template.json> <urls.txt> [output-folder]")?))?;
+            let urls=fs::read_to_string(args.get(3).context("urls.txt")?)?;
+            let settings=Settings::load(&data_dir().join("settings.json"))?;
+            let output=args.get(4).map(PathBuf::from);
+            let batch=reaction_studio::batch::create(&data_dir(),&template.title,&urls,&template,&settings,output.is_some(),output)?;
+            println!("{}",serde_json::to_string_pretty(&batch)?);
+        },
+        Some("batch-run")=>reaction_studio::batch::run(&data_dir(),args.get(2).context("batch-run <batch-id>")?,&std::env::current_exe()?)?,
+        Some("batch-item")=>reaction_studio::batch::run_item(&data_dir(),args.get(2).context("batch-item <batch-id> <item-id>")?,args.get(3).context("item-id")?)?,
+        Some("batch-action")=>{
+            let action:reaction_studio::batch::Action=serde_json::from_str(args.get(3).context("batch-action <batch-id> <action-json>")?)?;
+            reaction_studio::batch::action(&data_dir(),args.get(2).context("batch-id")?,action)?;
+        },
         Some("metadata-inspect")=>{
             let path=Path::new(args.get(2).context("metadata-inspect <input.mp4>")?);
             println!("{}",serde_json::to_string_pretty(&reaction_studio::export_metadata::inspect(&s,path,&cancel)?)?);
@@ -80,7 +94,7 @@ fn main() -> Result<()> {
             println!("{}",serde_json::json!({"path":source.path,"duration_ms":source.duration_ms,"width":source.width,"height":source.height,"audio":source.has_audio}));
         },
         Some("render")=>{let p=Project::load(Path::new(args.get(2).context("render <project.json> <output.mp4>")?))?;let output=PathBuf::from(args.get(3).context("output.mp4")?);let settings_path=data_dir().join("settings.json");let globals=if settings_path.is_file(){Settings::load(&settings_path)?}else{s};let effective=reaction_studio::workflow::effective_settings(&p,&globals);media::render(&p,&effective,&output,&cancel,|i,n|println!("Bước xuất {i}/{n}"))?;println!("OK {}",output.display());},
-        _=>println!("AIR3view CLI\n  doctor\n  download <YouTube URL> <folder>\n  prepare <project.json>\n  auto-run / auto-resume <project.json>\n  script-only / speech / assets / captions / evidence <project.json>\n  repair-script <project.json> <saved response>\n  render <project.json> <output.mp4>\n  metadata-inspect <input.mp4>\n  metadata-apply <project.json> <input.mp4> <new-output.mp4>\n  heygen-preflight"),
+        _=>println!("AIR3view CLI\n  doctor\n  download <YouTube URL> <folder>\n  prepare <project.json>\n  auto-run / auto-resume <project.json>\n  batch-create <template.json> <urls.txt> [output-folder]\n  batch-run <batch-id>\n  batch-action <batch-id> <action-json>\n  script-only / speech / assets / captions / evidence <project.json>\n  repair-script <project.json> <saved response>\n  render <project.json> <output.mp4>\n  metadata-inspect <input.mp4>\n  metadata-apply <project.json> <input.mp4> <new-output.mp4>\n  heygen-preflight"),
     }
     Ok(())
 }

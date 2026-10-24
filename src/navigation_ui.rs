@@ -43,7 +43,7 @@ fn navigation_icon(painter: &egui::Painter, page: Page, center: Pos2, color: Col
                 Stroke::NONE,
             ));
         }
-        Page::Queue => {
+        Page::Queue | Page::Batch => {
             for (y, x) in [(-6., 5.), (0., 8.), (6., 2.)] {
                 line((-7., y), (x, y));
             }
@@ -127,6 +127,7 @@ impl StudioApp {
                     (Page::Projects, "Thư viện dự án"),
                     (Page::Editor, "Biên tập video"),
                     (Page::Queue, "Tiến trình & nhật ký"),
+                    (Page::Batch, "Xử lý hàng loạt"),
                     (Page::Settings, "Cài đặt kết nối"),
                 ] {
                     let selected = self.page == page;

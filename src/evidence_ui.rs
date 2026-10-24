@@ -85,10 +85,12 @@ impl StudioApp {
     }
     pub(super) fn evidence_sound_settings_ui(&mut self,ui:&mut egui::Ui) {
         ui.label(RichText::new("ÂM THANH ẢNH DẪN CHỨNG").strong().color(MUTED));
-        let old=(self.project.evidence_settings.sound_enabled,self.project.evidence_settings.sound_gain);
+        let old=self.project.evidence_settings.clone();
         let s=&mut self.project.evidence_settings;
-        ui.checkbox(&mut s.sound_enabled,"Whoosh / pop / ting khi ảnh xuất hiện");
+        ui.checkbox(&mut s.sound_enabled,"Sound effect khi ảnh xuất hiện");
         ui.add_enabled_ui(s.enabled&&s.sound_enabled,|ui| {
+            choose(ui,"evidence_sound_style","Hiệu ứng",&mut s.sound_style,&[
+                ("whoosh","Whoosh"),("auto","Tự động theo loại thẻ"),("pop","Pop"),("ting","Ting")]);
             ui.spacing_mut().slider_width=(ui.available_width()-95.).clamp(60.,180.);
             ui.label("Âm lượng");
             let mut percent=s.sound_gain*100.;
@@ -96,12 +98,19 @@ impl StudioApp {
             #[cfg(test)] self.hitboxes.insert("evidence_sound_gain".into(),gain.rect);
             if gain.changed(){s.sound_gain=percent/100.;}
         });
-        if (s.sound_enabled,s.sound_gain)!=old {
-            let mut before=self.project.clone();before.evidence_settings.sound_enabled=old.0;before.evidence_settings.sound_gain=old.1;
+        if s.sound_enabled!=old.sound_enabled || s.sound_gain!=old.sound_gain || s.sound_style!=old.sound_style {
+            let style_changed=s.sound_style!=old.sound_style;
+            let mut before=self.project.clone();before.evidence_settings=old;
             self.project.ensure_composition();
             let gain=self.project.evidence_settings.sound_gain;
             if let Some(comp)=&mut self.project.composition {for c in comp.clips.iter_mut().filter(|c|c.track==timeline::SFX&&c.evidence_id.is_some()){c.gain=gain;}}
             self.timeline_view.history.record(before);self.transform_changed();
+            if style_changed && self.player.playing {
+                self.player.composition(self.project.clone(),self.settings.clone(),self.timeline_view.cursor,true);
+            }
+        }
+        if self.project.timeline.tracks[timeline::SFX].muted||self.project.timeline.tracks[timeline::EVIDENCE].muted {
+            ui.colored_label(egui::Color32::YELLOW,"Track SFX hoặc Dẫn chứng đang mute.");
         }
     }
     pub(super) fn evidence_settings_ui(&mut self, ui: &mut egui::Ui) {
@@ -114,8 +123,10 @@ impl StudioApp {
             choose(ui,"evidence_presentation","Trình bày",&mut s.presentation,&[
                 ("stack","Thẻ chồng · motion graphic"),("classic","Các ô cố định")]);
             if s.presentation=="stack" {
-                ui.label(RichText::new("Thẻ đầu vào sớm, ở giữa; thẻ sau phủ một phần. Thẻ trước lùi và mờ. Căn tay sẽ giữ thời điểm riêng.").size(11.).color(MUTED));
+                ui.label(RichText::new("Ảnh sau chồng lên ảnh trước. Các ảnh giữ đến hết cảnh, tiếp tục chuyển động; ảnh phía sau lùi mờ. Giữ thời điểm đã căn tay.").size(11.).color(MUTED));
             }
+            choose(ui,"evidence_motion","Chuyển động khi hiển thị",&mut s.motion,&[
+                ("zoom","Zoom vào nhẹ · 1 → 1,04"),("drift","Trôi nhẹ"),("none","Tĩnh")]);
             choose(
                 ui,
                 "evidence_preset",
@@ -138,17 +149,17 @@ impl StudioApp {
                     ("blur", "Ảnh nguồn làm mờ"),
                 ],
             );
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Số thẻ cùng lúc");
+            ui.add_enabled_ui(s.presentation!="stack",|ui| {ui.horizontal_wrapped(|ui| {
+                ui.label("Tối đa thẻ cùng lúc");
                 ui.add(egui::DragValue::new(&mut s.density).range(1..=3));
-            });
+            });});
             ui.horizontal_wrapped(|ui|{
                 ui.label("Crop ảnh dẫn chứng");
                 let _crop=ui.add(egui::DragValue::new(&mut s.crop_percent).speed(0.5).range(0.0..=30.0).suffix(" % / cạnh"));
                 #[cfg(test)] self.hitboxes.insert("evidence_crop_percent".into(),_crop.rect);
             });
             ui.label(RichText::new("Cắt đều mỗi cạnh ảnh gốc; 5% giữ vùng giữa 90% × 90%. Kết hợp vùng crop riêng của từng thẻ. Không đổi video nguồn.").size(11.).color(MUTED));
-            ui.horizontal_wrapped(|ui| {
+            ui.add_enabled_ui(s.presentation!="stack",|ui| {ui.horizontal_wrapped(|ui| {
                 ui.label("Hiển thị mặc định");
                 ui.add(
                     egui::DragValue::new(&mut s.default_duration_ms)
@@ -156,7 +167,10 @@ impl StudioApp {
                         .range(500..=30000)
                         .suffix(" ms"),
                 );
-            });
+            });});
+            if s.presentation=="stack" {
+                ui.label(RichText::new("Chia đều thời điểm xuất hiện trong cảnh; các thẻ cùng kết thúc ở cuối cảnh. Chỉnh riêng tại Căn thời điểm thủ công.").size(11.).color(MUTED));
+            }
         });
         if serde_json::to_vec(&self.project.evidence_settings).unwrap_or_default()!=old {
             if self.project.evidence_settings.crop_percent!=old_crop {
@@ -533,7 +547,7 @@ impl StudioApp {
                     ("none", "Không"),
                 ],
             );
-            ui.checkbox(&mut item.zoom, "Zoom nhẹ 1 → 1,04");
+            ui.checkbox(&mut item.zoom, "Thêm zoom nhẹ cho riêng thẻ này");
             field(ui, "Cụm từ trong lời thoại", &mut item.anchor_phrase);
             ui.add(
                 egui::DragValue::new(&mut item.occurrence)

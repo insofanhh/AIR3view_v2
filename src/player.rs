@@ -379,6 +379,25 @@ mod original_audio_tests {
     use super::*;
     use crate::{model::*,timeline};
     #[test]
+    fn real_evidence_whoosh_reaches_native_preview_with_gain_and_mute() {
+        let mut p=Project{segments:vec![Segment{id:"host".into(),kind:"host".into(),duration_ms:2000,
+            evidence_items:vec![crate::evidence::EvidenceItem{id:"photo".into(),kind:"fact".into(),asset:Some("photo.png".into()),..Default::default()}],..Default::default()}],..Default::default()};
+        p.ensure_composition();let clip=p.composition.as_ref().unwrap().clips.iter().find(|c|c.track==timeline::SFX).unwrap().clone();
+        assert!(clip.media.as_ref().unwrap().file_name().unwrap().to_string_lossy().starts_with("whoosh-"));
+        let player=Player::default();
+        let decode=|p:&Project| {
+            player.update_audio(p);
+            let decoder=rodio::Decoder::new(BufReader::new(std::fs::File::open(clip.media.as_ref().unwrap()).unwrap())).unwrap();
+            let audio=ControlledAudio{source:Box::new(decoder),controls:player.audio_mix.clone(),id:clip.id.clone(),samples:0,offset:0,duration:clip.duration_ms,fade_in:clip.fade_in_ms,fade_out:clip.fade_out_ms,gain:0.};
+            let samples:Vec<_>=audio.collect();
+            (samples.iter().map(|s|(*s as f64/32768.).powi(2)).sum::<f64>()/samples.len() as f64).sqrt()
+        };
+        let normal=decode(&p);assert!(normal>0.03,"Preview whoosh must survive fades and default gain");
+        p.composition.as_mut().unwrap().clips.iter_mut().find(|c|c.id==clip.id).unwrap().gain*=0.5;
+        let quieter=decode(&p);assert!((0.49..0.51).contains(&(quieter/normal)));
+        p.timeline.tracks[timeline::SFX].muted=true;assert_eq!(decode(&p),0.);
+    }
+    #[test]
     fn live_card_sound_gain_and_mute_change_samples_without_restart() {
         let mut p=Project{segments:vec![Segment{id:"host".into(),kind:"host".into(),duration_ms:1000,graphics:vec![GraphicCue{end_ms:900,..Default::default()}],..Default::default()}],..Default::default()};
         p.ensure_composition();let id=p.composition.as_ref().unwrap().clips.iter().find(|c|c.track==timeline::SFX).unwrap().id.clone();

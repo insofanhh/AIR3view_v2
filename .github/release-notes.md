@@ -1,4 +1,16 @@
-## AIR3view 0.2.4: timeline một hàng và sound effect cho thẻ thông tin
+## AIR3view 0.2.5: xử lý hàng loạt, mỗi URL một dự án
+
+- Thêm chế độ **Hàng loạt · mỗi URL một dự án**: dán nhiều URL hoặc nhập file `.txt`, lọc link trùng, bỏ chọn từng URL và dùng chung bản chụp thiết lập. Chế độ nhiều nguồn trong một dự án vẫn có sẵn.
+- Hàng đợi chạy lần lượt, mỗi dự án có checkpoint riêng; hỗ trợ tạm dừng, tiếp tục, dừng tác vụ hiện tại, đổi thứ tự, bỏ lượt và thử lại mục lỗi. Một URL lỗi riêng không chặn các URL sau; lỗi cấu hình/tài nguyên chung sẽ tạm dừng đợt.
+- Tùy chọn **Tự xuất MP4**, thư mục riêng cho từng dự án, kiểm tra kết quả xuất và dùng lại MP4 hợp lệ. Không chạy lại các mục đã hoàn thành khi tiếp tục.
+- Tiến trình nặng chạy ngoài GUI; đóng app dừng cây tiến trình do hàng đợi khởi tạo. Bảo vệ dự án đang chạy và chặn cài cập nhật trong khi hàng đợi hoạt động.
+- Ảnh dẫn chứng hiển thị đầy đủ, lớn hơn trong card; phân bổ thời điểm xuất hiện trong cảnh. Card sau chồng lên card trước, các card tiếp tục chuyển động nhẹ; card trước được làm mờ để giữ trọng tâm.
+- Âm thanh dẫn chứng mặc định **Whoosh**, có chọn kiểu tiếng và âm lượng riêng. Sửa lệch thời điểm SFX sau căn thời lượng giọng và tiếng phát dư cuối video.
+- Đã kiểm thử 3 URL thực tế từ tải nguồn, phân tích, tạo giọng/nhân vật đến MP4 9:16; kiểm thử hàng đợi dừng/tiếp tục/thử lại và giao diện cửa sổ hẹp. Bộ kiểm thử Rust: **111 thành công, 1 bỏ qua**, Clippy không có cảnh báo.
+
+**Cập nhật từ 0.2.3/0.2.4:** mở **Cập nhật → Cập nhật** để tự tải, cài và mở lại. Dự án và cấu hình được giữ lại. Bản 0.2.2 trở xuống cần tải ZIP Windows và giải nén toàn bộ một lần để có updater mới.
+
+### Tính năng từ 0.2.4: timeline một hàng và sound effect cho thẻ thông tin
 
 - Gom nút biên tập, phát/dừng, thời gian, Snap, SFX và zoom vào một hàng ngang với chiều cao nút đồng đều. Cửa sổ hẹp hỗ trợ cuộn ngang.
 - Nút **SFX** trên timeline: bật/tắt âm thanh thẻ thông tin, chọn **Tự động / Whoosh / Pop / Ting**, chỉnh âm lượng **0–200%**. Có điều chỉnh âm lượng riêng cho ảnh dẫn chứng.

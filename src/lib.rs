@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod asr;
 pub mod app;
 pub mod branding;
+pub mod batch;
 pub mod cartoon;
 pub mod composition;
 pub mod content_language;

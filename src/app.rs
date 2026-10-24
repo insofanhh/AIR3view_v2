@@ -43,12 +43,15 @@ mod evidence_ui;
 mod metadata_ui;
 #[path="updates_ui.rs"]
 mod updates_ui;
+#[path="batch_ui.rs"]
+mod batch_ui;
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Page {
     Editor,
     New,
     Projects,
     Queue,
+    Batch,
     Settings,
 }
 enum Task {
@@ -107,6 +110,7 @@ pub struct StudioApp {
     metadata_open: bool,
     metadata_actual: String,
     updates: crate::updates::Updates,
+    batch_view: batch_ui::BatchView,
     range_source: String,
     range_start: f64,
     range_end: f64,
@@ -226,8 +230,9 @@ impl StudioApp {
         }
         project.root = root.join("projects").join(&project.id);
         if let Some(path) = std::env::args().skip(1).find(|a| a.ends_with(".json")) {
-            if let Ok(p) = Project::load(std::path::Path::new(&path)) {
-                project = p;
+            let path = std::path::Path::new(&path);
+            if !path.parent().and_then(|p|p.file_name()).and_then(|p|p.to_str()).is_some_and(|id|crate::batch::reserved_project(&root,id)) {
+                if let Ok(p) = Project::load(path) { project = p; }
             }
         }
         let cli_args_text = serde_json::to_string(&settings.cli_args).unwrap();
@@ -241,6 +246,8 @@ impl StudioApp {
             Page::New
         } else if std::env::args().any(|a| a == "--page=projects") {
             Page::Projects
+        } else if std::env::args().any(|a| a == "--page=batch") {
+            Page::Batch
         } else {
             Page::Editor
         };
@@ -299,6 +306,7 @@ impl StudioApp {
             metadata_open: std::env::args().any(|a|a=="--metadata=open"),
             metadata_actual: String::new(),
             updates: crate::updates::Updates::new(root.join("updates.json")),
+            batch_view: batch_ui::BatchView::load(&root),
             range_source: "src_1".into(),
             range_start: 0.0,
             range_end: 10.0,
@@ -369,6 +377,10 @@ impl StudioApp {
         }
     }
     fn save(&mut self) {
+        if crate::batch::reserved_project(self.projects_root.parent().unwrap(), &self.project.id) {
+            self.message("Dự án đang được hàng đợi xử lý; tạm dừng trước khi lưu chỉnh sửa.", true);
+            return;
+        }
         match self.project.save() {
             Ok(()) => {
                 self.dirty = false;
@@ -398,6 +410,9 @@ impl StudioApp {
     }
     fn open(&mut self, path: PathBuf) {
         if self.busy { self.message("Chờ tác vụ hoàn tất hoặc hủy trước khi mở dự án khác.",true); return; }
+        if path.parent().and_then(|p|p.file_name()).and_then(|p|p.to_str()).is_some_and(|id|crate::batch::reserved_project(self.projects_root.parent().unwrap(),id)) {
+            self.message("Dự án đang ở hàng đợi chạy. Tạm dừng hàng đợi trước khi mở để chỉnh sửa.",true);return;
+        }
         match Project::load(&path) {
             Ok(p) => {
                 self.player.stop();
@@ -556,6 +571,9 @@ impl StudioApp {
         }
     }
     fn launch(&mut self, task: Task) {
+        if self.batch_view.active || self.batch_view.creating {
+            self.message("Hàng loạt đang chạy. Tạm dừng hàng đợi trước khi chạy tác vụ riêng.",true);return;
+        }
         if self.busy {
             return;
         }
@@ -765,6 +783,7 @@ impl StudioApp {
                             Page::New => "Tạo dự án mới",
                             Page::Projects => "Thư viện dự án",
                             Page::Queue => "Tiến trình xử lý",
+                            Page::Batch => "Xử lý hàng loạt",
                             Page::Settings => "Cài đặt kết nối",
                         }).size(24.0).strong());
                         ui.add(egui::Label::new(RichText::new(&self.project.title).color(MUTED).size(12.0)).truncate());
@@ -866,6 +885,7 @@ impl StudioApp {
             });
     }
     fn launch_preview_selected(&mut self) {
+        if self.batch_view.active{self.message("Tạm dừng hàng đợi trước khi dựng preview MP4. Preview layer trực tiếp vẫn dùng được.",true);return;}
         if self.busy {
             return;
         }
@@ -1991,7 +2011,7 @@ impl StudioApp {
         ui.add_space(12.0);
     }
     fn settings_page(&mut self, ui: &mut egui::Ui) {
-        egui::ScrollArea::vertical().show(ui,|ui|{ui.add_enabled_ui(!self.busy,|ui|{
+        egui::ScrollArea::vertical().show(ui,|ui|{ui.add_enabled_ui(!self.busy&&!self.batch_view.active,|ui|{
         self.youtube_cookie_settings(ui);
         ui.add_space(12.0);
         self.asr_settings(ui);
@@ -2054,6 +2074,7 @@ fn worker_path(name: &str) -> PathBuf {
 }
 impl StudioApp {
     fn draw(&mut self, ctx: &egui::Context) {
+        self.poll_batch();
         self.updates.poll();
         self.advance_update(ctx);
         if self.updates.installer.launching.is_some() {
@@ -2138,6 +2159,7 @@ impl StudioApp {
                     Page::New => {},
                     Page::Projects => self.projects_page(ui),
                     Page::Queue => self.queue_page(ui),
+                    Page::Batch => self.batch_page(ui),
                     Page::Settings => self.settings_page(ui),
                     _ => {}
                 });
@@ -2163,10 +2185,11 @@ impl eframe::App for StudioApp {
         self.draw(ctx);
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.batch_view.shutdown(self.projects_root.parent().unwrap());
         self.cancel.store(true, Ordering::Relaxed);
         self.player.stop();
         let _ = self.remember_project_defaults();
-        if self.dirty {
+        if self.dirty && !crate::batch::reserved_project(self.projects_root.parent().unwrap(), &self.project.id) {
             let _ = self.project.save();
         }
     }
