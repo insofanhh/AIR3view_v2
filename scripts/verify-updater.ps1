@@ -117,3 +117,4 @@ foreach ($taskCase in @('corrupt','traversal','duplicate','unlisted','tag','user
     Write-Host "PASS: rejected $taskCase package before installation."
 }
 Write-Host ('Updater verification PASS. Artifacts: ' + $taskScratch)
+exit 0
