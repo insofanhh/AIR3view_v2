@@ -80,7 +80,7 @@ pub fn download(
     cancel: &Cancel,
 ) -> Result<Source> {
     let url = validate_youtube_url(url)?;
-    fs::create_dir_all(folder)?;
+    fs::create_dir_all(folder).with_context(||format!("Không tạo/ghi được thư mục tải video nguồn: {}",folder.display()))?;
     let cache = folder.join(format!("{}.json", hash(&url)));
     if cache.is_file() {
         if let Ok(s) = serde_json::from_slice::<Source>(&fs::read(&cache)?) {

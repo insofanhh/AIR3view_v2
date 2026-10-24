@@ -48,6 +48,10 @@ pub fn apply_plan(p:&mut Project,plan:ScriptPlan)->Result<()> {
 
 /// The URL analysis branch starts immediately, before media downloads have finished.
 pub fn prepare(mut p: Project, s: Settings, tx: Sender<Event>, cancel: Cancel) -> Result<Project> {
+    // Resolve once before starting paid analysis. Never relocate already downloaded sources.
+    let source_folder = if crate::download_location::needs_download(&p) {
+        crate::download_location::folder(&p, &s)?
+    } else { p.root.join("sources") };
     if s.provider == "antigravity" && (s.analysis_input=="local" || p.sources.iter().any(|src|src.url.is_empty()) || (s.analysis_input=="auto" && providers::url_known_unavailable(&p,&s))) {
         p.status = "Tải video trước khi phân tích local".into();
         p.save()?;
@@ -65,7 +69,7 @@ pub fn prepare(mut p: Project, s: Settings, tx: Sender<Event>, cancel: Cancel) -
                 media::download(
                     &s,
                     &source.url,
-                    &p.root.join("sources"),
+                    &source_folder,
                     source.id.clone(),
                     &cancel,
                 )?
@@ -155,7 +159,7 @@ pub fn prepare(mut p: Project, s: Settings, tx: Sender<Event>, cancel: Cancel) -
                     media::download(
                         &downloads_s,
                         &src.url,
-                        &root.join("sources"),
+                        &source_folder,
                         src.id.clone(),
                         &downloads_cancel,
                     )?
@@ -255,7 +259,8 @@ fn avatar_key(s: &Settings, seg: &Segment) -> String {
 
 fn scene_error(p: &Project, stage_name: &str, id: &str, error: anyhow::Error) -> anyhow::Error {
     let _ = crate::diagnostics::failure(&p.root, stage_name, Some(id), &error);
-    error.context(format!("Cảnh {id} / {stage_name}"))
+    let scene = p.segments.iter().position(|s| s.id == id).map(|n| (n + 1).to_string()).unwrap_or_else(|| id.into());
+    error.context(format!("Cảnh {scene} / {stage_name}"))
 }
 
 /// Complete and checkpoint speech independently of any paid cloud operation.

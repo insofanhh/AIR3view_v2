@@ -98,7 +98,7 @@ pub fn effective_settings(p: &Project, s: &Settings) -> Settings {
         .unwrap_or_else(|| s.clone())
 }
 fn fingerprint(p: &Project, s: &Settings) -> String {
-    let s = Settings {preview_long_edge:0,..s.clone()};
+    let s = Settings {preview_long_edge:0,youtube_download_folder:String::new(),..s.clone()};
     let sources: Vec<_> = p
         .sources
         .iter()
@@ -132,6 +132,7 @@ fn fingerprint(p: &Project, s: &Settings) -> String {
 }
 pub fn preflight(p: &Project, s: &Settings) -> Result<()> {
     p.validate_configuration()?;
+    if crate::download_location::needs_download(p) {crate::download_location::validate(s)?;}
     ensure!(crate::content_language::supported(&p.rules.language), "Ngôn ngữ lời review chưa hỗ trợ; chọn Tiếng Việt hoặc English");
     ensure!(
         !p.sources.is_empty(),
@@ -365,7 +366,7 @@ fn run_stages(
         } else {
             Status::Failed
         };
-        job.message = diagnostics::safe_text(&format!("{error:#}"), &[]);
+        job.message = diagnostics::failure_text(&format!("{error:#}"));
         let _ = job.publish(&root, &tx);
         if let Ok(saved) = Project::load(&root.join("project.json")) {
             let _ = tx.send(Event::Project(Box::new(saved)));
@@ -572,6 +573,9 @@ mod tests {
             ..s
         };
         let effective = effective_settings(&p, &globals);
+        let relocated=Settings{youtube_download_folder:"D:\\YouTube".into(),..globals.clone()};
+        assert_eq!(stage_keys(&p,&globals).changed_phase(&stage_keys(&p,&relocated)),Phase::Ready);
+        assert_eq!(fingerprint(&p,&globals),fingerprint(&p,&relocated),"Changing storage must not repeat AI/TTS work");
         assert_eq!(effective.voice, "Old voice");
         assert_eq!(effective.avatar_provider, "cartoon2d");
         assert_eq!(effective.vieneu_url, globals.vieneu_url);

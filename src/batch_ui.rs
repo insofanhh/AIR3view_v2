@@ -16,6 +16,7 @@ pub(super) struct BatchView {
     pub creating: bool,
     batches: Vec<Batch>,
     selected: String,
+    dates: crate::date_filter::DateFilter,
     last_poll: Instant,
     child: Option<std::process::Child>,
     owned_id: String,
@@ -40,6 +41,7 @@ impl BatchView {
             active: batch::running(data),
             creating: false,
             selected: batches.first().map(|b| b.id.clone()).unwrap_or_default(),
+            dates: crate::date_filter::DateFilter::load(&data.join("batch-dates.json")),
             batches,
             last_poll: Instant::now(),
             child: None,
@@ -50,6 +52,13 @@ impl BatchView {
             excluded: Default::default(),
             detail: String::new(),
         }
+    }
+    fn visible_sessions(&mut self,today:crate::date_filter::Date)->Vec<String> {
+        let ids:Vec<_>=self.batches.iter().filter(|b|self.dates.matches(Some(b.created_at),today)).map(|b|b.id.clone()).collect();
+        if !ids.contains(&self.selected) {
+            self.selected=self.batches.iter().find(|b|ids.contains(&b.id)&&matches!(b.status.as_str(),"running"|"pausing"))
+                .map(|b|b.id.clone()).or_else(||ids.first().cloned()).unwrap_or_default();
+        }ids
     }
     pub fn shutdown(&mut self, data: &std::path::Path) {
         if let Some(mut child) = self.child.take() {
@@ -74,6 +83,8 @@ impl StudioApp {
             self.batch_view.creating = false;
             match result {
                 Ok((b, start)) => {
+                    self.batch_view.dates.period=crate::date_filter::Period::All;
+                    self.batch_view.dates.save(&data.join("batch-dates.json"));
                     self.batch_view.selected = b.id.clone();
                     self.batch_view.batches.insert(0, b.clone());
                     self.history = project_store::list(&self.projects_root);
@@ -431,21 +442,50 @@ impl StudioApp {
             );
         }
     }
-    pub(super) fn batch_page(&mut self, ui: &mut egui::Ui) {
+    fn batch_filter_ui(&mut self, ui: &mut egui::Ui) -> Vec<String> {
         ui.horizontal_wrapped(|ui| {
             ui.heading("Hàng loạt · mỗi URL một dự án");
-            if ui.button("+ Đợt xử lý mới").clicked() {
+            if ui.button("+ Phiên hàng loạt mới").clicked() {
                 self.new_project();
                 self.batch_view.prefs.enabled = true;
                 self.page = Page::Editor;
                 self.setup_open = true;
             }
         });
-        if self.batch_view.batches.is_empty() {
-            ui.label("Chưa có hàng đợi. Thêm danh sách URL trong Thiết lập dự án và chọn chế độ Hàng loạt.");
-            return;
+        ui.label(RichText::new("Lọc theo ngày tạo phiên · ngày giờ theo máy").size(12.).color(MUTED));
+        let before=self.batch_view.dates.clone();
+        let _date_rects=self.batch_view.dates.ui(ui,"batch_dates");
+        #[cfg(test)] for (i,rect) in _date_rects.into_iter().enumerate(){self.hitboxes.insert(format!("batch_date_{i}"),rect);}
+        if self.batch_view.dates!=before {self.batch_view.dates.save(&self.projects_root.parent().unwrap().join("batch-dates.json"));}
+        let today=crate::date_filter::local_parts(crate::date_filter::now()).unwrap().0;
+        let visible=self.batch_view.visible_sessions(today);
+        let count:usize=self.batch_view.batches.iter().filter(|b|visible.contains(&b.id)).map(|b|b.items.len()).sum();
+        ui.label(format!("{} / {} phiên · {count} video",visible.len(),self.batch_view.batches.len()));
+        if self.batch_view.active {
+            if let Some(id)=self.batch_view.batches.iter().find(|b|!visible.contains(&b.id)&&matches!(b.status.as_str(),"running"|"pausing")).map(|b|b.id.clone()) {
+                ui.horizontal_wrapped(|ui|{
+                    ui.colored_label(TEAL,"Có phiên đang chạy ngoài bộ lọc.");
+                    if ui.button("Xem phiên đang chạy").clicked(){
+                        self.batch_view.dates.period=crate::date_filter::Period::All;
+                        self.batch_view.selected=id;
+                        self.batch_view.dates.save(&self.projects_root.parent().unwrap().join("batch-dates.json"));
+                    }
+                });
+            }
         }
-        egui::ComboBox::from_id_salt("batch_picker")
+        visible
+    }
+    fn batch_session_ui(&mut self, ui: &mut egui::Ui, visible: &[String]) -> Option<(Batch, Option<Action>, bool, bool)> {
+        ui.label(RichText::new("Phiên chạy").strong());
+        if self.batch_view.batches.is_empty() {
+            ui.add(egui::Label::new("Chưa có hàng đợi. Thêm danh sách URL trong Thiết lập dự án và chọn chế độ Hàng loạt.").wrap());
+            return None;
+        }
+        if visible.is_empty(){
+            ui.add(egui::Label::new("Không có phiên trong khoảng ngày này. Chọn khoảng khác hoặc Bỏ lọc.").wrap());
+            return None;
+        }
+        let _picker=egui::ComboBox::from_id_salt("batch_picker")
             .width(ui.available_width().min(540.))
             .truncate()
             .selected_text(
@@ -453,44 +493,36 @@ impl StudioApp {
                     .batches
                     .iter()
                     .find(|b| b.id == self.batch_view.selected)
-                    .map(|b| b.title.as_str())
-                    .unwrap_or("Chọn đợt xử lý"),
+                    .map(session_label)
+                    .unwrap_or_else(||"Chọn phiên chạy".into()),
             )
             .show_ui(ui, |ui| {
-                for b in &self.batch_view.batches {
-                    ui.selectable_value(&mut self.batch_view.selected, b.id.clone(), &b.title);
+                ui.set_max_width(540.);
+                ui.style_mut().wrap_mode=Some(egui::TextWrapMode::Truncate);
+                for b in self.batch_view.batches.iter().filter(|b|visible.contains(&b.id)) {
+                    let label=session_label(b);
+                    ui.selectable_value(&mut self.batch_view.selected,b.id.clone(),&label).on_hover_text(label);
                 }
             });
-        let Some(b) = self
+        #[cfg(test)] self.hitboxes.insert("batch_session_picker".into(),_picker.response.rect);
+        let b = self
             .batch_view
             .batches
             .iter()
             .find(|b| b.id == self.batch_view.selected)
-            .cloned()
-        else {
-            return;
-        };
+            .cloned()?;
+        ui.add(egui::Label::new(RichText::new(&b.title).strong()).truncate()).on_hover_text(session_label(&b));
         let complete = b.items.iter().filter(|i| i.state.complete()).count();
         let failed = b.items.iter().filter(|i| i.state.retryable()).count();
-        ui.label(format!(
+        ui.add(egui::Label::new(format!(
             "{complete}/{} hoàn thành · {failed} cần xử lý · {}",
             b.items.len(),
-            match b.status.as_str() {
-                "running" => "Đang chạy",
-                "pausing" => "Đang chờ dừng",
-                "paused" => "Đã tạm dừng",
-                "blocked" => "Tạm dừng do cấu hình / tài nguyên",
-                "interrupted" => "Bị gián đoạn",
-                "complete" => "Đã hoàn thành",
-                "complete_with_errors" => "Hoàn thành, có mục lỗi",
-                _ => "Chờ chạy",
-            }
-        ));
+            session_status(&b),
+        )).wrap());
         let running = self.batch_view.active && matches!(b.status.as_str(), "running" | "pausing");
         let mut action = None;
         let mut start = false;
         let mut retry_start = false;
-        let mut open = None;
         ui.horizontal_wrapped(|ui| {
             if running {
                 if ui.button("Tạm dừng sau video hiện tại").clicked() {
@@ -528,6 +560,33 @@ impl StudioApp {
                 }
             }
         });
+        Some((b,action,start,retry_start))
+    }
+    pub(super) fn batch_page(&mut self, ui: &mut egui::Ui) {
+        let width=ui.available_width();
+        let selected=if width>=700. {
+            ui.horizontal_top(|ui| {
+                let left_width=(width-ui.spacing().item_spacing.x)*0.46;
+                let left=ui.allocate_ui_with_layout(Vec2::new(left_width,0.),egui::Layout::top_down(egui::Align::Min),|ui| {
+                    ui.set_width(left_width);
+                    self.batch_filter_ui(ui)
+                });
+                #[cfg(test)] self.hitboxes.insert("batch_header_left".into(),left.response.rect);
+                let right_width=width-left_width-ui.spacing().item_spacing.x;
+                let right=ui.allocate_ui_with_layout(Vec2::new(right_width,0.),egui::Layout::top_down(egui::Align::Min),|ui| {
+                    ui.set_width(right_width);
+                    self.batch_session_ui(ui,&left.inner)
+                });
+                #[cfg(test)] self.hitboxes.insert("batch_header_right".into(),right.response.rect);
+                right.inner
+            }).inner
+        }else{
+            let visible=self.batch_filter_ui(ui);
+            self.batch_session_ui(ui,&visible)
+        };
+        let Some((b,mut action,start,mut retry_start))=selected else {return;};
+        let mut open=None;
+        ui.add_space(8.);
         ui.separator();
         egui::ScrollArea::vertical()
             .id_salt("batch_items")
@@ -567,7 +626,17 @@ impl StudioApp {
                             }
                         });
                         if !item.message.is_empty() {
-                            ui.add(egui::Label::new(&item.message).wrap());
+                            if let Some(message)=crate::diagnostics::friendly_error(&item.message) {
+                                let _response=ui.add(egui::Label::new(RichText::new(message).color(Color32::LIGHT_RED)).wrap());
+                                #[cfg(test)] self.hitboxes.insert(format!("batch_error_{index}"),_response.rect);
+                                egui::CollapsingHeader::new("Chi tiết kỹ thuật / thư mục cần kiểm tra").id_salt(&item.id).show(ui,|ui|{
+                                    if let Ok(path)=batch::project_path(self.projects_root.parent().unwrap(),item) {
+                                        ui.add(egui::Label::new(format!("Dự án/cache: {}",path.parent().unwrap_or(&path).display())).wrap());
+                                    }
+                                    if let Some(folder)=&b.output_folder {ui.add(egui::Label::new(format!("Nơi xuất MP4: {}",folder.display())).wrap());}
+                                    ui.add(egui::Label::new(crate::diagnostics::safe_text(&item.message,&[])).wrap());
+                                });
+                            }else{ui.add(egui::Label::new(&item.message).wrap());}
                         }
                         ui.horizontal_wrapped(|ui| {
                             if ui
@@ -658,6 +727,16 @@ impl StudioApp {
         }
     }
 }
+fn session_label(b:&Batch)->String {
+    format!("{} · #{} · {} · {} video · {}",crate::date_filter::timestamp(Some(b.created_at)),b.id.chars().take(6).collect::<String>(),b.title,b.items.len(),session_status(b))
+}
+fn session_status(b:&Batch)->&'static str {
+    match b.status.as_str() {
+        "running"=>"Đang chạy","pausing"=>"Đang chờ dừng","paused"=>"Đã tạm dừng",
+        "blocked"=>"Tạm dừng do cấu hình / tài nguyên","interrupted"=>"Bị gián đoạn",
+        "complete"=>"Đã hoàn thành","complete_with_errors"=>"Hoàn thành, có mục lỗi",_=>"Chờ chạy",
+    }
+}
 fn read_tail(path: &std::path::Path, item_id: &str) -> String {
     use std::io::{Read, Seek, SeekFrom};
     let Ok(mut f) = fs::File::open(path) else {
@@ -679,6 +758,72 @@ fn read_tail(path: &std::path::Path, item_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn batch_header_keeps_filters_left_and_session_right_including_date_ranges() {
+        for width in [820.,1080.,1440.] {
+            let ctx=egui::Context::default();let mut app=StudioApp::from_context(&ctx);app.capture_path=None;
+            let b=Batch{version:1,id:"aaaaaa-header".into(),title:"Phiên hàng loạt có tên rất dài để kiểm tra bố cục bộ chọn phiên".into(),created_at:crate::date_filter::now(),status:"paused".into(),auto_export:false,output_folder:None,items:vec![]};
+            app.batch_view.selected=b.id.clone();app.batch_view.batches=vec![b];
+            for period in [crate::date_filter::Period::All,crate::date_filter::Period::Range] {
+                app.batch_view.dates.period=period;
+                let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width,900.));
+                for _ in 0..3 {let _=ctx.run(egui::RawInput{screen_rect:Some(screen),..Default::default()},|ctx|{egui::CentralPanel::default().show(ctx,|ui|app.batch_page(ui));});}
+                let left=app.hitboxes["batch_header_left"];let right=app.hitboxes["batch_header_right"];
+                assert!(left.right()<=right.left(),"Overlapping header columns at {width}px: {left:?}, {right:?}");
+                assert!((left.top()-right.top()).abs()<1.);
+                assert!(screen.contains_rect(right));
+                assert!(right.contains_rect(app.hitboxes["batch_session_picker"]));
+                for (key,rect) in &app.hitboxes {if key.starts_with("batch_date_"){assert!(left.contains_rect(*rect),"{key} outside filter column: {rect:?}");}}
+            }
+        }
+    }
+    #[test]
+    fn date_filter_keeps_selection_inside_visible_sessions_and_distinguishes_duplicate_titles() {
+        let temp=tempfile::tempdir().unwrap();
+        let mut view=BatchView::load(temp.path());
+        let mut recent=Batch{version:1,id:"aaaaaa-recent".into(),title:"Đợt xử lý mới".into(),created_at:crate::date_filter::now(),status:"paused".into(),auto_export:false,output_folder:None,items:vec![]};
+        let today=crate::date_filter::local_parts(recent.created_at).unwrap().0;
+        let mut older=recent.clone();older.id="bbbbbb-older".into();older.created_at-=10*86400;older.status="running".into();
+        view.selected=older.id.clone();view.batches=vec![recent.clone(),older.clone()];
+        view.dates.period=crate::date_filter::Period::Today;
+        assert_eq!(view.visible_sessions(today),vec![recent.id.clone()]);
+        assert_eq!(view.selected,recent.id);
+        view.dates.period=crate::date_filter::Period::Yesterday;
+        assert!(view.visible_sessions(today).is_empty());assert!(view.selected.is_empty());
+        view.dates.period=crate::date_filter::Period::All;
+        assert_eq!(view.visible_sessions(today).len(),2);assert_eq!(view.selected,older.id);
+        // Even two same-title sessions created in the same minute remain distinguishable.
+        recent.created_at=older.created_at;
+        assert_ne!(session_label(&recent),session_label(&older));
+        assert!(session_label(&recent).contains("#aaaaaa"));
+    }
+    #[test]
+    fn saved_disk_error_shows_readable_recovery_and_fits_queue_cards() {
+        for width in [280.,540.,1080.] {
+            let ctx=egui::Context::default();let mut app=StudioApp::from_context(&ctx);
+            app.capture_path=None;
+            let data=app.projects_root.parent().unwrap().to_owned();
+            let mut b=batch::create(&data,"Disk error QA","https://youtu.be/dBy-8s6ly08",&app.project,&app.settings,false,None).unwrap();
+            // Persist an old-format error, then reopen it with the new UI.
+            b.items[0].state=State::Failed;b.items[0].stage="Assets".into();
+            b.items[0].message="Quy trình tự động / Giọng & nhân vật: Cảnh 8 / Avatar 2D: [vost#0:0/ffv1] Error submitting a packet to the muxer: No space left on device; error code: -28".into();
+            b.save(&data).unwrap();
+            app.batch_view.selected=b.id.clone();
+            app.batch_view.batches=vec![Batch::load(&batch::root(&data,&b.id).unwrap().join("batch.json")).unwrap()];
+            let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width,900.));
+            let mut visible=String::new();
+            for _ in 0..3 {
+                let output=ctx.run(egui::RawInput{screen_rect:Some(screen),..Default::default()},|ctx|{
+                    egui::CentralPanel::default().show(ctx,|ui|app.batch_page(ui));
+                });
+                visible=output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape{Some(t.galley.text())}else{None}).collect::<Vec<_>>().join(" ");
+            }
+            assert!(screen.contains_rect(app.hitboxes["batch_error_0"]));
+            assert!(visible.contains("Không đủ dung lượng ổ đĩa") && visible.contains("Thử lại"));
+            assert!(!visible.contains("muxer") && !visible.contains("-28"),"Raw details should be collapsed: {visible}");
+            assert!(app.batch_view.batches[0].items[0].message.contains("-28"),"Keep technical details in durable state");
+        }
+    }
     #[test]
     fn batch_queue_wraps_actions_and_skip_never_deletes_a_project() {
         for width in [280., 540., 1080.] {

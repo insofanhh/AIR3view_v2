@@ -72,20 +72,26 @@ def arm_pose(t, events, side):
 
     Angles are interpolated, rather than independent elbow/wrist positions, so
     limbs cannot stretch or switch elbow solutions during preparation/recovery.
-    The third angle describes palm orientation (0 = fingers up, 180 = down).
+    The wrist flex is relative to the forearm. Palm orientation is derived only
+    after interpolating the arm, so fingers never rotate back toward the elbow.
     """
     kind, amount = gesture_pose(t, events)
-    # Rotate the palm inward on the way up: the outward half-circle would
-    # sweep the fingertips beyond the frame during the intermediate pose.
-    rest = (24, -28, -175)
+    rest = (24, -28, 0)
     target = {
         "none": rest,
-        "open_palms": (25, 155, 10),
-        "point": (10, 150, 55) if side == -1 else rest,
-        "beat": (16, 150, 16) if side == 1 else rest,
-        "surprised": (42, 176, 4),
+        "open_palms": (25, 155, -12),
+        "point": (10, 150, 18) if side == -1 else rest,
+        "beat": (16, 150, -8) if side == 1 else rest,
+        "surprised": (42, 176, -4),
     }[kind]
-    upper, lower, palm = [a+(b-a)*amount for a, b in zip(rest, target)]
+    upper, lower, flex = [a+(b-a)*amount for a, b in zip(rest, target)]
+    # Tuck the elbow during the sweep instead of folding the hand inward just
+    # to fit the canvas. Rest/full-extension poses retain their authored angles.
+    if target != rest:
+        # First lift the elbow outward so a downward-facing hand clears the
+        # waist, then tuck it as the forearm passes through horizontal.
+        upper += 18 * math.sin(2 * math.pi * amount) - 18 * math.sin(math.pi * amount)
+    palm = 180 - lower + flex
     shoulder = SHOULDERS[side]
     def end(start, angle, length):
         angle = math.radians(angle)
@@ -135,25 +141,91 @@ def _hand(draw, wrist, angle, side, kind, amount, skin, ink):
     stroke([(-6, -18), (6, -23)], 2, "#AFBDCB" if skin == "#FCFCFD" else "#CE8D69")
 
 
-def draw_arms(draw, t, events, portrait=False, shirt="#536EF6", layer="all"):
+def draw_arms(draw, t, events, portrait=False, shirt="#536EF6", layer="all", outfit="hoodie"):
     ink, skin = ("#13171E", "#FCFCFD") if portrait else ("#172235", "#F1B78F")
     shirt = "#E2E8F0" if portrait else shirt
+    robe = outfit == "robe"
+    if robe:
+        ink, skin, shirt = "#242632", "#FCFCFD", "#9699BA"
     for side in [-1, 1]:
         shoulder, elbow, wrist, palm, kind, amount = arm_pose(t, events, side)
         if layer in {"all", "sleeves"}:
             # Sleeves emerge underneath the shoulder panel, not from the hood.
             _capsule(draw, shoulder, elbow, 27, 22, ink, ink)
-            _capsule(draw, elbow, wrist, 22, 17, ink, ink)
+            _capsule(draw, elbow, wrist, 22, 25 if robe else 17, ink, ink)
             _capsule(draw, shoulder, elbow, 24, 19, shirt, shirt)
-            _capsule(draw, elbow, wrist, 19, 14, shirt, shirt)
+            _capsule(draw, elbow, wrist, 19, 22 if robe else 14, shirt, shirt)
             # Elbow fold and ribbed cuff make the bend/readable wrist explicit.
             dx, dy = wrist[0]-elbow[0], wrist[1]-elbow[1]
             nx, ny = -dy/FOREARM, dx/FOREARM
-            for distance in [3, 8]:
-                x, y = wrist[0]-dx/FOREARM*distance, wrist[1]-dy/FOREARM*distance
-                draw.line([(x-nx*13, y-ny*13), (x+nx*13, y+ny*13)], fill="#9BAEC4" if portrait else "#364A9F", width=2)
+            if robe:
+                draw.line([(elbow[0]+nx*9, elbow[1]+ny*9),
+                           (wrist[0]+nx*15-dx*.1, wrist[1]+ny*15-dy*.1)], fill="#646786", width=3)
+                draw.line([(wrist[0]-nx*22, wrist[1]-ny*22),
+                           (wrist[0]+nx*22, wrist[1]+ny*22)], fill=ink, width=3)
+            else:
+                for distance in [3, 8]:
+                    x, y = wrist[0]-dx/FOREARM*distance, wrist[1]-dy/FOREARM*distance
+                    draw.line([(x-nx*13, y-ny*13), (x+nx*13, y+ny*13)], fill="#9BAEC4" if portrait else "#364A9F", width=2)
         if layer in {"all", "hands"}:
             _hand(draw, wrist, palm, side, kind, amount, skin, ink)
+
+
+def draw_robe_body(draw, t, events):
+    """Full lavender robe on a 512x704 canvas, with layered skirt and feet."""
+    ink, coat, shade = "#242632", "#9699BA", "#646786"
+    sway = math.sin(t*2.4)*3
+    # Feet/trousers sit behind the hem. Keep a clear gap under the garment,
+    # including at the extremes of the deterministic cloth sway.
+    for side in [-1, 1]:
+        x = 256+side*39
+        draw.polygon([(x-17, 607), (x+17, 607), (x+19, 665), (x-18, 665)],
+                     fill="#EFF1ED", outline=ink, width=3)
+        draw.rounded_rectangle((x-23, 654, x+24, 681), 12, fill="#282A31", outline=ink, width=3)
+        draw.line([(x-17, 674), (x+18, 674)], fill="#555965", width=2)
+    draw_arms(draw, t, events, layer="sleeves", outfit="robe")
+    contour = [(230, 243), (207, 250), (176, 266), (173, 303), (181, 362),
+               (169, 474), (145+sway, 619), (184+sway, 645), (217+sway, 626),
+               (295+sway, 626), (328+sway, 645), (367+sway, 619), (343, 474), (331, 362),
+               (339, 303), (336, 266), (305, 250), (282, 243)]
+    draw.polygon(contour, fill=coat)
+    draw.line(contour+[contour[0]], fill=ink, width=4, joint="curve")
+    draw.polygon([(185, 319), (201, 348), (193, 458), (174+sway, 604),
+                  (159+sway, 617), (180, 462)], fill=shade)
+    draw.polygon([(327, 319), (311, 348), (319, 458), (338+sway, 604),
+                  (353+sway, 617), (332, 462)], fill=shade)
+    # Continuous white under-robe, visible between two open lavender panels.
+    inner = [(231, 248), (281, 248), (291, 411), (314+sway, 645),
+             (279+sway, 653), (236+sway, 653), (198+sway, 645), (221, 411)]
+    draw.polygon(inner, fill="#F9FAF7", outline=ink, width=3)
+    draw.line([(231, 248), (277, 362), (276, 412)], fill=ink, width=3)
+    draw.line([(281, 248), (246, 337), (237, 412)], fill=ink, width=3)
+    # Long pleats and open coat edges read as cloth instead of a flat block.
+    draw.polygon([(238, 413), (227+sway, 642), (211+sway, 645)], fill="#D5DAD8")
+    draw.polygon([(279, 414), (300+sway, 643), (281+sway, 648)], fill="#DDE1DE")
+    draw.line([(253, 429), (249+sway, 636)], fill="#A8B0AE", width=2)
+    for side in [-1, 1]:
+        draw.line([(256+side*47, 410), (256+side*49, 493),
+                   (256+side*58+sway, 629)], fill=ink, width=3, joint="curve")
+        draw.line([(256+side*67, 458), (256+side*80+sway, 601)], fill="#BCBED4", width=3)
+    draw.polygon([(222, 251), (202, 279), (218, 294), (208, 310), (234, 373), (245, 358)], fill="#B5B7D0")
+    draw.polygon([(290, 251), (310, 279), (294, 294), (304, 310), (278, 373), (267, 358)], fill="#B5B7D0")
+    draw.line([(222, 251), (202, 279), (218, 294), (208, 310), (234, 373)], fill=ink, width=3)
+    draw.line([(290, 251), (310, 279), (294, 294), (304, 310), (278, 373)], fill=ink, width=3)
+    draw.rounded_rectangle((209, 371, 303, 410), 3, fill="#38343F", outline=ink, width=3)
+    draw.line([(211, 383), (301, 383)], fill="#615966", width=2)
+    draw.line([(211, 398), (301, 398)], fill="#615966", width=2)
+    swing = math.sin(t*2.4)*3
+    draw.line([(228, 410), (228+swing, 467)], fill=ink, width=2)
+    for y, fill in [(419, "#DCE9E4"), (431, "#F8FAF6"), (443, "#B7C9C2")]:
+        x = 228+swing*(y-410)/41
+        draw.ellipse((x-5, y-5, x+5, y+5), fill=fill, outline=ink, width=2)
+    x = 228+swing
+    draw.ellipse((x-4, 453, x+4, 464), fill="#B73D47", outline=ink, width=1)
+    draw.polygon([(x-4, 465), (x+4, 465), (x+7, 517), (x, 525), (x-7, 517)], fill="#D3AE55", outline=ink)
+    for dx in [-3, 0, 3]:
+        draw.line([(x+dx, 470), (x+dx*1.6, 517)], fill="#94733B", width=1)
+    draw_arms(draw, t, events, layer="hands", outfit="robe")
 
 
 def draw_half_body(draw, t, events, portrait=False, shirt="#536EF6"):

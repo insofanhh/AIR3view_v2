@@ -10,7 +10,7 @@ foreach ($taskFolder in @('src', 'assets', 'resources', 'scripts', '.github', '.
     $taskFiles += Get-ChildItem -LiteralPath (Join-Path $taskRoot $taskFolder) -File -Recurse
 }
 foreach ($taskName in @('vieneu_server.py', 'transcribe.py', 'cuda_runtime.py', 'requirements-cuda.txt', 'cartoon_render.py', 'gesture_rig.py',
-    'requirements.txt', 'requirements.lock', 'PORTRAIT_ASSET.md', 'portrait-base.png', 'cartoon-portrait.png', 'cartoon-studio.png', 'cartoon-analyst.png')) {
+    'requirements.txt', 'requirements.lock', 'PORTRAIT_ASSET.md', 'portrait-base.png', 'panda-head.png', 'cartoon-panda.png', 'cartoon-portrait.png', 'cartoon-studio.png', 'cartoon-analyst.png')) {
     $taskFiles += Get-Item -LiteralPath (Join-Path $taskRoot ('workers\' + $taskName))
 }
 foreach ($taskName in @('FFMPEG-LICENSE.txt', 'FFMPEG-BUILDINFO.txt', 'yt-dlp-SHA2-256SUMS', 'runtime-lock.json', 'NODE-LICENSE.txt', 'UV-LICENSE-MIT.txt', 'UV-LICENSE-APACHE.txt')) {

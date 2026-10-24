@@ -144,6 +144,7 @@ impl Composition {
                         } else {
                             transform.width=if s.avatar_size=="large" {(p.output.avatar_scale*1.6).min(0.8)} else {p.output.avatar_scale};
                             transform.height=transform.width*w/h*aspect;
+                            if transform.height>1. {transform.width/=transform.height;transform.height=1.;}
                             transform.x=(1.-transform.width)*p.output.avatar_x+transform.width/2.;
                             transform.y=(1.-transform.height)*p.output.avatar_y+transform.height/2.;
                         }
@@ -196,8 +197,10 @@ impl Composition {
             start+=s.duration_ms;
         }
         p.layer_defaults.apply(p, &mut result);
-        if !p.layer_defaults.free_aspect {for c in result.clips.iter_mut().filter(|c|matches!(c.track,timeline::EVIDENCE|timeline::ANNOTATION)) {
-            if let Some((cw,ch))=c.media.as_ref().and_then(|a|image::image_dimensions(a).ok()) {
+        if !p.layer_defaults.free_aspect {for c in result.clips.iter_mut().filter(|c|matches!(c.track,timeline::AVATAR|timeline::EVIDENCE|timeline::ANNOTATION)) {
+            if c.track==timeline::AVATAR {
+                c.transform.contain_aspect(avatar_aspect(c.media.as_deref()),w as u32,h as u32);
+            }else if let Some((cw,ch))=c.media.as_ref().and_then(|a|image::image_dimensions(a).ok()) {
                 c.transform.contain_aspect(ch as f32/cw.max(1) as f32,w as u32,h as u32);
             }
         }}
@@ -375,6 +378,13 @@ impl Project {
                     }else{true};
                     if preserve{
                         c.transform=prior.transform.clone();
+                        // A new rig can change square media into a full-body
+                        // portrait. Fit it inside the edited box, preserving
+                        // placement instead of stretching the new character.
+                        if c.media!=prior.media && c.track==timeline::AVATAR && !self.layer_defaults.free_aspect {
+                            let (w,h)=self.output.dimensions();
+                            c.transform.contain_aspect(avatar_aspect(c.media.as_deref()),w,h);
+                        }
                         // Newly rasterized evidence cards follow the photo's
                         // aspect instead of stretching into their old 4:3 box.
                         if c.media!=prior.media && matches!(c.track,timeline::EVIDENCE|timeline::ANNOTATION) && !self.layer_defaults.free_aspect {
@@ -436,6 +446,29 @@ pub fn evaluated(p:&Project,c:&LayerClip,ms:u64)->Transform {
 
 #[cfg(test)] mod tests {
     use super::*;
+    #[test]
+    fn replacing_square_avatar_with_full_body_preserves_placement_and_proportions() {
+        let temp=tempfile::tempdir().unwrap();
+        let square=temp.path().join("square.mkv");let tall=temp.path().join("tall.mkv");
+        for (path,size) in [(&square,"512x512"),(&tall,"512x704")] {
+            crate::process::run(&Settings::default().ffmpeg,&[
+                "-y".into(),"-v".into(),"error".into(),"-f".into(),"lavfi".into(),"-i".into(),
+                format!("color=c=red:s={size}:r=1:d=1"),"-c:v".into(),"ffv1".into(),path.to_string_lossy().into_owned(),
+            ],None,&crate::process::cancel_token(),std::time::Duration::from_secs(30),None).unwrap();
+        }
+        let mut p=Project::default();
+        p.segments.push(Segment{id:"host".into(),kind:"host".into(),duration_ms:1000,avatar:Some(square),..Default::default()});
+        p.ensure_composition();
+        let c=p.composition.as_mut().unwrap().clips.iter_mut().find(|c|c.track==timeline::AVATAR).unwrap();
+        c.transform.x=0.37;c.transform.y=0.42;c.transform.rotation=7.;c.transform.opacity=0.8;
+        let before=c.transform.clone();
+        p.segments[0].avatar=Some(tall);p.ensure_composition();
+        let after=&p.composition.as_ref().unwrap().clips.iter().find(|c|c.track==timeline::AVATAR).unwrap().transform;
+        let (w,h)=p.output.dimensions();
+        assert!((after.height*h as f32/(after.width*w as f32)-704./512.).abs()<0.001);
+        assert_eq!((after.x,after.y,after.rotation,after.opacity),(before.x,before.y,before.rotation,before.opacity));
+        assert!(after.width<=before.width && after.height<=before.height);
+    }
     #[cfg(windows)]
     #[test]
     fn avatar_aspect_cache_does_not_read_media_and_invalidates_on_replacement() {

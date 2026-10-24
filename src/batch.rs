@@ -227,7 +227,7 @@ pub fn create(
         version: 1,
         id: uuid::Uuid::new_v4().to_string(),
         title: if title.trim().is_empty() {
-            "Đợt xử lý mới".into()
+            "Phiên hàng loạt".into()
         } else {
             title.trim().into()
         },
@@ -299,7 +299,7 @@ pub fn list(data: &Path) -> Vec<Batch> {
         .filter_map(|e| e.ok())
         .filter_map(|e| Batch::load(&e.path().join("batch.json")).ok())
         .collect();
-    batches.sort_by_key(|b| std::cmp::Reverse(b.created_at));
+    batches.sort_by_key(|b| std::cmp::Reverse((b.created_at,b.id.clone())));
     batches
 }
 pub struct Lease {
@@ -658,6 +658,7 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
         // Authentication and cookie fixes can be applied without changing production choices.
         if let Ok(live) = Settings::load(&data.join("settings.json")) {
             settings.youtube_cookie_path = live.youtube_cookie_path;
+            settings.youtube_download_folder = live.youtube_download_folder;
         }
         let mut p = Project::load(&path)?;
         ensure_capacity(&p.root)?;
@@ -752,7 +753,7 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
         Err(e) => Outcome {
             ok: false,
             cancelled: cancel.load(Ordering::Relaxed),
-            error: diagnostics::safe_text(&format!("{e:#}"), &[]),
+            error: diagnostics::failure_text(&format!("{e:#}")),
             output: None,
             title,
         },
@@ -761,6 +762,7 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
     Ok(())
 }
 fn global_error(text: &str) -> bool {
+    if diagnostics::disk_full(text) {return true;}
     let text = text.to_lowercase();
     [
         "http 401",
@@ -774,6 +776,8 @@ fn global_error(text: &str) -> bool {
         "not enough space",
         "không đủ dung lượng",
         "ổ đĩa/thư mục",
+        "thư mục tải video nguồn",
+        "thư mục video nguồn",
         "cuda out of memory",
         "cublas",
         "cudnn",
@@ -1019,7 +1023,9 @@ mod tests {
     }
     #[test]
     fn batch_creation_isolates_sources_snapshots_and_does_not_inherit_timeline() {
-        let (temp, mut p, s) = setup();
+        let (temp, mut p, mut s) = setup();
+        let source_base=temp.path().join("YouTube originals");fs::create_dir(&source_base).unwrap();
+        s.youtube_download_folder=source_base.to_string_lossy().into_owned();
         p.rules.min_seconds = 100;
         p.rules.max_seconds = 240;
         p.rules.language = "en".into();
@@ -1047,6 +1053,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(b.items.len(), 3);
+        let snapshot=Settings::load(&root(temp.path(),&b.id).unwrap().join("settings.json")).unwrap();
+        assert_eq!(snapshot.youtube_download_folder,s.youtube_download_folder);
         assert_eq!(parse_urls(URLS).duplicates, 1);
         assert_eq!(
             p.segments.len(),
@@ -1058,6 +1066,7 @@ mod tests {
         for item in &b.items {
             let mut child = Project::load(&project_path(temp.path(), item).unwrap()).unwrap();
             assert!(ids.insert(child.id.clone()));
+            assert_eq!(crate::download_location::folder(&child,&snapshot).unwrap(),source_base.join(format!("AIR3view-{}",child.id)).join("sources"));
             assert_eq!(child.sources.len(), 1);
             assert_eq!(child.sources[0].url, item.url);
             assert!(
@@ -1141,6 +1150,8 @@ mod tests {
         assert!(!global_error("YouTube HTTP 403 age restricted"));
         assert!(global_error("API HTTP 401 unauthorized"));
         assert!(global_error("Không đủ dung lượng trống"));
+        assert!(global_error("There is not enough space on the disk. (os error 112)"));
+        assert!(!transient("No space left on device; timeout"));
         assert!(transient("HTTP 429 temporarily unavailable"));
         assert!(!transient("CUDA out of memory timeout"));
         assert!(!global_error(

@@ -15,6 +15,8 @@ pub struct Summary {
     pub source_count: usize,
     pub segment_count: usize,
     pub duration_ms: u64,
+    pub created_at: Option<u64>,
+    pub updated_at: Option<u64>,
 }
 
 #[derive(serde::Deserialize)]
@@ -45,10 +47,16 @@ impl SummaryCache {
             if (*size, *modified) == stamp { return summary.clone(); }
         }
         #[cfg(test)] { self.reads += 1; }
+        // write_json replaces the manifest on every save. Directory birth time
+        // is stable across those saves; never use the manifest's birth time.
+        let created_at=path.parent().and_then(|p|fs::metadata(p).ok()).and_then(|m|m.created().ok())
+            .or_else(||metadata.created().ok()).and_then(crate::date_filter::unix_time);
+        let updated_at=stamp.1.and_then(crate::date_filter::unix_time);
         let summary = fs::read(path).ok().and_then(|bytes| serde_json::from_slice::<SummaryFile>(&bytes).ok())
             .filter(|p|p.version==1).map(|p| Summary {
                 id:p.id, title:p.title, status:p.status, source_count:p.sources.len(),
                 segment_count:p.segments.len(), duration_ms:p.segments.iter().fold(0u64, |sum,s|sum.saturating_add(s.duration_ms)),
+                created_at,updated_at,
             });
         self.entries.insert(path.to_owned(), (stamp.0, stamp.1, summary.clone()));
         summary
@@ -226,6 +234,7 @@ mod tests {
         p.segments.push(crate::model::Segment{duration_ms:12345,avatar:Some(temp.path().join("missing-avatar.mkv")),..Default::default()});
         let bytes=serde_json::to_vec(&p).unwrap();fs::write(&path,&bytes).unwrap();
         let mut cache=SummaryCache::default();
+        let created_at=cache.get(&path).unwrap().created_at;
         for _ in 0..100 {
             let summary=cache.get(&path).unwrap();
             assert_eq!(summary.title,p.title);assert_eq!(summary.source_count,1);
@@ -237,6 +246,7 @@ mod tests {
         p.status="Đã xuất video mới".into();
         fs::write(&path,serde_json::to_vec(&p).unwrap()).unwrap();
         assert_eq!(cache.get(&path).unwrap().status,p.status);assert_eq!(cache.reads,2);
+        assert_eq!(cache.get(&path).unwrap().created_at,created_at,"Saving a manifest must not change the project creation date");
         fs::write(&path,b"invalid manifest").unwrap();
         assert!(cache.get(&path).is_none());assert!(cache.get(&path).is_none());assert_eq!(cache.reads,3);
         cache.clear();assert!(cache.get(&path).is_none());assert_eq!(cache.reads,4);

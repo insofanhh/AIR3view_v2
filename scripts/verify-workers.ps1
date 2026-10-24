@@ -4,6 +4,8 @@ $taskPackage=(Resolve-Path -LiteralPath $PackagePath).Path
 $taskScratch=Join-Path ([IO.Path]::GetTempPath()) ('AIR3view-worker-verify-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $taskScratch | Out-Null
 $taskPython=Join-Path $taskPackage '.venv\Scripts\python.exe'
+& $taskPython (Join-Path $PSScriptRoot 'verify-avatar-rig.py') --runtime $taskPackage
+if ($LASTEXITCODE -ne 0) { throw 'Avatar joint and wrist geometry verification failed' }
 $taskPreviousPort=$env:VIENEU_PORT
 $env:VIENEU_PORT='18765'
 $taskProcess=$null

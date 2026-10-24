@@ -28,12 +28,44 @@ App dùng lại VieNeu đang chạy nếu API hỗ trợ giọng tham chiếu v�
 - `.github/workflows/release.yml`: mỗi push `main` chạy test/Clippy, build EXE với CRT tĩnh, đóng gói và kiểm tra render hai tỉ lệ trước khi công bố release. Cần GitHub Actions được bật và token workflow có `contents: write`.
 - `release.json` ghi version/tag/commit/thời gian build; `package-manifest.json` chứa hash các file runtime. Release kèm `SHA256SUMS.txt` cho ZIP. Bản đầu dùng tag theo Cargo, những lần tiếp theo dùng hậu tố `-build.<số workflow>`.
 
+## Nơi lưu video nguồn YouTube
+
+Trong **Nơi lưu / metadata → Thư mục video nguồn YouTube → Đổi thư mục video nguồn…**, chọn ổ/thư mục muốn tải video gốc về. App ghi nhớ ngay cho dự án sau và các video hàng loạt tiếp theo. Mỗi dự án lưu vào `<thư mục đã chọn>/AIR3view-<ID>/sources/`, gồm video gốc và dữ liệu tải đi kèm. **Dùng thư mục dự án** trở về mặc định `<dự án>/sources/`.
+
+Thiết lập này tách biệt với thư mục xuất MP4. Video đã tải và video nhập từ máy giữ nguyên vị trí; đổi nơi lưu không di chuyển chúng, không chạy lại AI/giọng. Proxy, giọng, avatar và cache vẫn nằm trong dự án. Ổ nguồn đã chọn không còn khả dụng sẽ được báo để kết nối lại hoặc chọn nơi khác. Video nguồn ngoài thư mục dự án được giữ lại khi xóa dự án.
+
+## Lọc dự án và phiên hàng loạt theo ngày
+
+- **Thư viện dự án:** chọn ngày tạo hoặc ngày cập nhật, rồi lọc Hôm nay, Hôm qua, 7/30 ngày gần đây, ngày cụ thể hoặc khoảng ngày. Ngày nhập theo **DD/MM/YYYY**, tính theo múi giờ của máy, gồm cả ngày bắt đầu và kết thúc. Danh sách xếp mới nhất trước; **Bỏ lọc** hiện lại tất cả.
+- **Xử lý hàng loạt:** lọc theo ngày tạo phiên. Mỗi phiên có ngày giờ, mã riêng, tên, số video và trạng thái, giúp phân biệt các phiên trùng tên. Bộ chọn chỉ hiện các phiên khớp ngày; phiên đang chạy ngoài bộ lọc có nút mở nhanh. Tạo phiên mới sẽ hiện lại tất cả và chọn phiên vừa tạo.
+- App nhớ riêng bộ lọc của hai màn hình và cách chọn ngày của thư viện. Ngày tạo dự án cũ dùng ngày tạo thư mục trên máy; sao chép thư mục sang máy khác có thể thay đổi ngày này. Lọc danh sách không làm thay đổi hàng đợi hay dữ liệu dự án.
+
 ## Dịch vụ
 
 - AI: Antigravity CLI hỗ trợ JSON hoặc Gemini API qua biến môi trường `GEMINI_API_KEY`. Phân tích URL có thể chạy song song với tải; tùy khả năng provider, app chuyển sang transcript + ảnh sau tải.
 - Giọng: VieNeu tại `http://127.0.0.1:8765`, model `pnnbao-ump/VieNeu-TTS-v3-Turbo`, có preset và audio tham chiếu. Kịch bản hỗ trợ Tiếng Việt/English; cấu hình giọng cần phù hợp với ngôn ngữ và runtime.
 - Nhân vật: 2D local dùng Rhubarb + Pillow hoặc HeyGen Avatar IV qua `HEYGEN_API_KEY`. Nhánh HeyGen đã có kiểm thử hợp đồng bằng giả lập; cần key/số dư để kiểm tra dịch vụ thực tế.
 - YouTube: chọn cookie Netscape `.txt` trong Cài đặt kết nối khi nguồn yêu cầu đăng nhập. Cookie phải còn hiệu lực và tài khoản có quyền xem; chỉ truyền khi tải, không gửi cho AI.
+
+## Nhân vật 2D: cách tạo và chuyển động
+
+**Hiện có:** bốn mẫu Chân dung/bán thân hoodie xám, Studio, Analyst và **Gấu trúc • nón rơm / kính đen / áo tím**. Chọn mẫu tại Cài đặt kết nối hoặc Thiết lập dự án → Giọng, nhân vật & âm thanh → 2D local. Gấu trúc toàn thân có áo choàng tím dài, vạt áo trắng, đai lưng, chuỗi hạt/tua và chân; nhép miệng, gật/nghiêng đầu, cử chỉ tay, chuyển động nhẹ của vạt áo và tua. Khung trong suốt 512×704 giữ đúng tỉ lệ, không kéo giãn nhân vật. Nút chọn ảnh nhân vật thuộc nhánh HeyGen; nhánh **2D local chưa có chức năng import PNG/PSD/Live2D/Spine tùy ý**. Không thay trực tiếp các file đầu bằng ảnh bất kỳ: vị trí miệng, tỉ lệ và khớp vai đang được hiệu chỉnh cho từng mẫu.
+
+Nhánh local hoạt động như sau: **WAV giọng → Rhubarb phân tích khẩu hình → ghép miệng theo thời gian → rig vai/khuỷu/cổ tay và cử chỉ theo lời thoại → video nhân vật nền trong suốt → ghép vào timeline**. Tay/thân dùng các đường chuyển động được lập trình, không phải model AI tự đoán chuyển động từ ảnh. Đầu, miệng và cử chỉ được tính theo timestamp để tua preview và xuất video nhất quán. Hướng bàn tay bám theo cẳng tay, cổ tay chỉ gập nhẹ; quỹ đạo khuỷu giữ ngón tay trong khung.
+
+Để chuẩn bị một nhân vật khác cho tích hợp vào renderer:
+
+1. Vẽ hoặc tạo ảnh nhân vật **bán thân, nhìn chính diện, hai vai rõ, tay tách thân, nền trong suốt**, nên làm việc ở 1024×1024 trở lên; tránh cắt tóc/ngón tay và tránh tay che mặt.
+2. Chuẩn bị PSD nhiều layer hoặc PNG riêng cho đầu/tóc, mắt mở/nhắm, lông mày, thân, cánh tay trên, cẳng tay và bàn tay trái/phải. Vẽ đủ phần bị che ở các khớp để khi xoay không lộ lỗ trống. Ảnh dẹt một lớp cần tách và vẽ bù trước.
+3. Chuẩn bị bộ miệng **A–H và X nghỉ** theo quy ước Rhubarb, hoặc dùng miệng được vẽ bằng code như các mẫu sẵn. Không vẽ cố định một miệng trên nền mặt rồi đè thêm miệng khác.
+4. Gắn điểm xoay ở cổ, vai, khuỷu, cổ tay; thiết lập quan hệ cha/con, chiều bàn tay trái/phải và giới hạn khớp. Hiệu chỉnh vị trí miệng theo mặt mới. Đây là bước rig; cần bổ sung cấu hình và bộ đọc asset vào AIR3view trước khi import được từ UI.
+5. Tạo các trạng thái nghỉ, mở hai tay, chỉ tay, nhấn nhịp và bất ngờ; chuyển động có chuẩn bị, nhấn, giữ và trở về nghỉ. Căn khẩu hình bằng audio; căn cử chỉ bằng từ/thời điểm trong kịch bản. Kiểm tra cả các khung chuyển tiếp, không chỉ tư thế đầu/cuối.
+
+Prompt tham khảo để tạo bản thiết kế: “Nhân vật hoạt hình 2D bán thân nhìn chính diện, đường nét rõ và nhất quán, đầu và hai vai đầy đủ, hai cánh tay tách nhẹ khỏi thân, bàn tay đúng giải phẫu với năm ngón, lòng bàn tay và cổ tay đúng chiều, không phối cảnh mạnh, không vật che khuất, nền trong suốt, không chữ, bố cục chừa khoảng trống quanh tóc và bàn tay.” Ảnh tạo ra vẫn cần tách layer và rig; prompt không tự tạo được một model chuyển động.
+
+Có thể dựng rig trong Live2D/Spine rồi viết bộ tích hợp tương ứng, nhưng app hiện chưa đọc trực tiếp các định dạng đó. Tài liệu chuẩn: [Rhubarb mouth shapes](https://github.com/DanielSWolf/rhubarb-lip-sync#mouth-shapes), [Live2D nhập PSD](https://docs.live2d.com/en/cubism-editor-manual/psd-import/), [Spine bones](https://eu.esotericsoftware.com/spine-bones).
+
+**Sau khi cập nhật rig:** video/avatar đã tạo trước đó vẫn là file cũ. Mở dự án → **Tạo giọng + avatar** để tạo lại nhân vật (WAV hợp lệ được dùng lại), kiểm tra preview rồi xuất MP4 lại. Khóa cache của nhân vật có fingerprint của worker/rig nên bản dựng mới không dùng lại video tay cũ.
 
 ## Whisper: CPU / CUDA và large-v3-turbo
 
@@ -101,6 +133,8 @@ Dữ liệu đợt nằm trong `%LOCALAPPDATA%\ReactionStudio\batches\<ID>`: `ba
 ## Dữ liệu và log
 
 Dự án/cấu hình: `%LOCALAPPDATA%\ReactionStudio` (giữ tên cũ để tương thích). Log worker nằm trong `logs/vieneu-out.log`, `logs/vieneu-err.log`. Cache model VieNeu dùng file thường trong `runtime/huggingface-regular-v1` để ONNX hoạt động cả khi Windows bật Developer Mode; có thể đổi bằng biến `REACTION_MODEL_CACHE`. Dự án chứa `project.json`, `workflow.json`, `logs/pipeline.jsonl`, media/cache. Xóa dự án qua nút trong Thư viện; dọn source/build không cần xóa AppData.
+
+Khi hết dung lượng, màn hình dự án/hàng loạt hiển thị nguyên nhân tiếng Việt và hướng dẫn kiểm tra ổ chứa dự án/cache, giải phóng dung lượng rồi thử lại. Mở **Chi tiết kỹ thuật / thư mục cần kiểm tra** hoặc **Nhật ký** để xem thư mục và lỗi gốc. Hàng đợi tạm dừng khi lỗi dung lượng, không tự thử lại liên tục. Chọn ổ lưu MP4 khác không chuyển cache dự án sang ổ đó.
 
 ## Build và đóng gói
 

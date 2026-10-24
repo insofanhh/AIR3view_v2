@@ -1,4 +1,15 @@
-## AIR3view 0.2.5: xử lý hàng loạt, mỗi URL một dự án
+## AIR3view 0.2.6: thư mục video nguồn, bộ lọc ngày và nhân vật 2D
+
+- Thêm chọn **Thư mục video nguồn YouTube** trong **Nơi lưu / metadata**; ghi nhớ cho các dự án mới và video tiếp theo trong hàng đợi. Mỗi dự án có thư mục nguồn riêng để tránh ghi đè. Có nút trở về nơi lưu mặc định của dự án.
+- Giữ nguyên đường dẫn video đã tải; thay nơi lưu không yêu cầu phân tích, tạo giọng hoặc avatar lại. Báo rõ khi ổ lưu không khả dụng. Thư mục xuất MP4 được chọn độc lập.
+- Thêm bộ lọc ngày cho **Thư viện dự án** và **Xử lý hàng loạt**, sắp xếp các phiên chạy rõ ràng; điều chỉnh bố cục ngang, đặt **Theo** và **Lọc ngày** cùng hàng.
+- Thêm nhân vật **Gấu trúc** với phần thân dưới, chuyển động và nhép miệng; sửa hướng cổ tay, ngón tay và giữ đúng tỉ lệ nhân vật trong preview/video.
+- Làm rõ lỗi thiếu dung lượng và cách xử lý; hàng đợi tạm dừng khi gặp lỗi tài nguyên chung. Cập nhật icon khi menu được thu gọn.
+- Đã đạt **128 kiểm thử Rust, 1 bỏ qua**, Clippy không cảnh báo; kiểm tra **4.010 tư thế tay** và cài/khôi phục updater thành công. Kiểm thử lưu/khôi phục cấu hình, đường dẫn Unicode, thư mục nguồn độc lập và bố cục menu. Luồng tải được kiểm thử với dữ liệu mạng giả lập; probe, proxy và giải mã khung hình dùng FFmpeg thật. Quy trình phát hành tiếp tục kiểm tra render, TTS, avatar và Whisper trước khi công bố.
+
+**Cập nhật:** bấm **Cập nhật** trong app để tự tải, cài và mở lại. Dự án và cấu hình được giữ lại. Video nguồn đặt ngoài thư mục dự án vẫn được giữ khi xóa dự án.
+
+### Tính năng từ 0.2.5: xử lý hàng loạt, mỗi URL một dự án
 
 - Thêm chế độ **Hàng loạt · mỗi URL một dự án**: dán nhiều URL hoặc nhập file `.txt`, lọc link trùng, bỏ chọn từng URL và dùng chung bản chụp thiết lập. Chế độ nhiều nguồn trong một dự án vẫn có sẵn.
 - Hàng đợi chạy lần lượt, mỗi dự án có checkpoint riêng; hỗ trợ tạm dừng, tiếp tục, dừng tác vụ hiện tại, đổi thứ tự, bỏ lượt và thử lại mục lỗi. Một URL lỗi riêng không chặn các URL sau; lỗi cấu hình/tài nguyên chung sẽ tạm dừng đợt.

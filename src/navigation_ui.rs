@@ -43,10 +43,37 @@ fn navigation_icon(painter: &egui::Painter, page: Page, center: Pos2, color: Col
                 Stroke::NONE,
             ));
         }
-        Page::Queue | Page::Batch => {
-            for (y, x) in [(-6., 5.), (0., 8.), (6., 2.)] {
-                line((-7., y), (x, y));
+        Page::Queue => {
+            painter.rect_stroke(
+                Rect::from_center_size(center, Vec2::new(18., 21.)),
+                2.,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            for y in [-5., 0., 5.] {
+                painter.circle_filled(center + Vec2::new(-4., y), 1., color);
+                line((0., y), (5., y));
             }
+        }
+        Page::Batch => {
+            // Offset video cards distinguish batch processing from the log list.
+            line((-10., 4.), (-10., -9.));
+            line((-10., -9.), (5., -9.));
+            painter.rect_stroke(
+                Rect::from_min_size(center + Vec2::new(-6., -5.), Vec2::new(17., 15.)),
+                2.,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    center + Vec2::new(0., -1.),
+                    center + Vec2::new(0., 6.),
+                    center + Vec2::new(5., 2.5),
+                ],
+                color,
+                Stroke::NONE,
+            ));
         }
         Page::Settings => {
             for (x, y) in [(-6., -3.), (0., 4.), (6., -1.)] {
@@ -56,6 +83,26 @@ fn navigation_icon(painter: &egui::Painter, page: Page, center: Pos2, color: Col
             }
         }
     }
+}
+
+fn update_icon(painter: &egui::Painter, center: Pos2, color: Color32) {
+    let stroke = Stroke::new(1.7, color);
+    let start = -std::f32::consts::FRAC_PI_2;
+    let end = start + std::f32::consts::TAU * 0.8;
+    let points = (0..=28)
+        .map(|i| {
+            let angle = start + (end - start) * i as f32 / 28.;
+            center + Vec2::angled(angle) * 8.
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, stroke));
+    let tip = center + Vec2::angled(end) * 8.;
+    let tangent = Vec2::new(-end.sin(), end.cos());
+    let normal = Vec2::angled(end);
+    painter.add(egui::Shape::line(
+        vec![tip - tangent * 4. + normal * 3., tip, tip - tangent * 4. - normal * 3.],
+        stroke,
+    ));
 }
 
 impl StudioApp {
@@ -174,7 +221,27 @@ impl StudioApp {
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
                     if collapsed {
-                        if ui.small_button("UPD").on_hover_text("Phiên bản & cập nhật").clicked(){self.updates.open=true;}
+                        let response = ui.add_sized(
+                            [ui.available_width(), 42.],
+                            egui::Button::new("")
+                                .fill(if self.updates.open {
+                                    BLUE.gamma_multiply(0.16)
+                                } else {
+                                    Color32::TRANSPARENT
+                                })
+                                .stroke(Stroke::NONE)
+                                .corner_radius(8),
+                        );
+                        #[cfg(test)]
+                        self.hitboxes.insert("nav_update".into(), response.rect);
+                        update_icon(
+                            ui.painter(),
+                            response.rect.center(),
+                            if self.updates.open { BLUE } else { MUTED },
+                        );
+                        if response.on_hover_text("Phiên bản & cập nhật").clicked() {
+                            self.updates.open = true;
+                        }
                         let (rect, response) = ui.allocate_exact_size(
                             Vec2::new(ui.available_width(), 26.),
                             Sense::hover(),

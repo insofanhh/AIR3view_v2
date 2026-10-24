@@ -14,6 +14,9 @@ pub struct Settings {
     pub ytdlp: String,
     /// Optional user-selected Netscape cookie file; never store cookie contents here.
     pub youtube_cookie_path: String,
+    /// Optional app-wide base for newly downloaded originals; existing paths stay valid.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub youtube_download_folder: String,
     /// Node must be explicitly enabled in yt-dlp; only Deno is enabled by default.
     pub youtube_node: String,
     pub python: String,
@@ -58,6 +61,7 @@ impl Default for Settings {
             ffprobe: default_tool("ffprobe"),
             ytdlp: default_tool("yt-dlp"),
             youtube_cookie_path: String::new(),
+            youtube_download_folder: String::new(),
             youtube_node: default_youtube_node(),
             python: default_python(),
             provider: "antigravity".into(),

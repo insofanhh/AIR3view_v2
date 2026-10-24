@@ -98,6 +98,8 @@ pub struct StudioApp {
     last_save: Instant,
     history: Vec<PathBuf>,
     library_cache: project_store::SummaryCache,
+    library_dates: crate::date_filter::DateFilter,
+    library_by_updated: bool,
     projects_root: PathBuf,
     pending_delete: Option<project_store::DeleteInfo>,
     diagnostics: String,
@@ -294,6 +296,8 @@ impl StudioApp {
             last_save: Instant::now(),
             history,
             library_cache: Default::default(),
+            library_dates: crate::date_filter::DateFilter::load(&root.join("library-dates.json")),
+            library_by_updated: fs::read(root.join("library-date-source.json")).ok().and_then(|b|serde_json::from_slice(&b).ok()).unwrap_or(false),
             projects_root: root.join("projects"),
             pending_delete: None,
             diagnostics: String::new(),
@@ -802,21 +806,50 @@ impl StudioApp {
                             #[cfg(test)] self.hitboxes.insert("top_export".into(), export.rect);
                             if export.clicked() { self.launch(Task::Render); }
                             let mut choose = false;
+                            let mut choose_source = false;
+                            let mut reset_source = false;
                             let _location = ui.menu_button("Nơi lưu / metadata", |ui| {
                                 ui.set_max_width(340.0);
                                 ui.label("Thư mục xuất video đã ghi nhớ");
-                                ui.label(self.export_location.folder().map(|p|p.display().to_string()).unwrap_or_else(|| "Chưa chọn — sẽ hỏi khi xuất lần đầu".into()));
+                                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                                    ui.add(egui::Label::new(self.export_location.folder().map(|p|p.display().to_string()).unwrap_or_else(|| "Chưa chọn — sẽ hỏi khi xuất lần đầu".into())).wrap());
+                                });
                                 ui.separator();
                                 let change = ui.button("Đổi thư mục…");
                                 #[cfg(test)] self.hitboxes.insert("export_change_folder".into(), change.rect);
                                 if change.clicked() { choose = true; ui.close_menu(); }
                                 ui.separator();
+                                ui.label("Thư mục video nguồn YouTube");
+                                let source_path=if self.settings.youtube_download_folder.is_empty() {
+                                    format!("Theo dự án: {}",self.project.root.join("sources").display())
+                                }else{
+                                    self.settings.youtube_download_folder.clone()
+                                };
+                                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                                    ui.add(egui::Label::new(source_path).wrap());
+                                });
+                                let source_change=ui.button("Đổi thư mục video nguồn…");
+                                #[cfg(test)] self.hitboxes.insert("source_change_folder".into(),source_change.rect);
+                                if source_change.clicked(){choose_source=true;ui.close_menu();}
+                                let source_reset=ui.add_enabled(!self.settings.youtube_download_folder.is_empty(),egui::Button::new("Dùng thư mục dự án"));
+                                #[cfg(test)] self.hitboxes.insert("source_reset_folder".into(),source_reset.rect);
+                                if source_reset.clicked(){reset_source=true;ui.close_menu();}
+                                ui.add(egui::Label::new(RichText::new("Ghi nhớ cho lần tải sau và hàng loạt. Video đã tải giữ nguyên vị trí.").size(11.).color(MUTED)).wrap());
+                                ui.separator();
                                 let metadata=ui.button("Metadata video…");
                                 #[cfg(test)] self.hitboxes.insert("export_metadata_open".into(),metadata.rect);
                                 if metadata.clicked() {self.metadata_open=true;ui.close_menu();}
                             });
+                            // Deterministic native screenshot QA; enabled only with capture mode.
+                            if self.capture_path.is_some() && self.frames==3 && std::env::args().any(|a|a=="--capture-menu=storage") {
+                                let mut state=egui::menu::BarState::load(ui.ctx(),ui.id());
+                                **state=Some(egui::menu::MenuRoot::new(_location.response.rect.left_bottom(),_location.response.id));
+                                state.store(ui.ctx(),ui.id());
+                            }
                             #[cfg(test)] self.hitboxes.insert("top_export_location".into(), _location.response.rect);
                             if choose { self.choose_export_folder(); }
+                            if choose_source { self.choose_source_folder(); }
+                            if reset_source { self.remember_source_folder(None); }
                             let save = ui.button("Lưu dự án");
                             #[cfg(test)] self.hitboxes.insert("top_save".into(), save.rect);
                             if save.clicked() { self.save(); self.message("Đã lưu project.json", false); }
@@ -843,6 +876,23 @@ impl StudioApp {
             }
         }
     }
+    fn choose_source_folder(&mut self) {
+        let mut dialog=rfd::FileDialog::new().set_title("Chọn nơi tải video nguồn YouTube — AIR3view sẽ ghi nhớ");
+        let current=std::path::Path::new(&self.settings.youtube_download_folder);
+        if current.is_dir(){dialog=dialog.set_directory(current);}
+        if let Some(folder)=dialog.pick_folder(){self.remember_source_folder(Some(folder));}
+    }
+    fn remember_source_folder(&mut self,folder:Option<PathBuf>) {
+        let config=self.projects_root.parent().unwrap().join("settings.json");
+        match crate::download_location::remember(&mut self.settings,&config,folder) {
+            Ok(())=>self.message(if self.settings.youtube_download_folder.is_empty(){
+                "Video nguồn tải mới sẽ lưu trong thư mục sources của từng dự án."
+            }else{
+                "Đã ghi nhớ nơi tải video nguồn. Áp dụng cho lần tải mới và các video hàng loạt tiếp theo; video đã tải giữ nguyên vị trí."
+            },false),
+            Err(error)=>self.message(format!("{error:#}"),true),
+        }
+    }
     fn bottom(&mut self, ctx: &egui::Context) {
         egui::TopBottomPanel::bottom("statusbar")
             .frame(
@@ -855,10 +905,11 @@ impl StudioApp {
                     if self.busy {
                         ui.spinner();
                     }
+                    let friendly = self.is_error.then(||crate::diagnostics::friendly_error(&self.notice)).flatten();
                     let text = if self.page==Page::Editor && self.setup_open && self.is_error {
                         "Cần xử lý lỗi • xem chi tiết trong thiết lập dự án"
                     } else if !self.notice.is_empty() {
-                        &self.notice
+                        friendly.as_deref().unwrap_or(&self.notice)
                     } else {
                         &self.project.status
                     };
@@ -1037,11 +1088,12 @@ impl StudioApp {
                         canvas.width()
                             * scale
                             * if production.avatar_provider == "cartoon2d" {
-                                1.0
+                                if production.cartoon_character == "panda" { 704.0 / 512.0 } else { 1.0 }
                             } else {
                                 0.7
                             },
                     );
+                    let av_size = av_size * (canvas.height() / av_size.y).min(1.0);
                     let av = Rect::from_min_size(
                         canvas.min
                             + Vec2::new(
@@ -1502,8 +1554,8 @@ impl StudioApp {
             });
         });
     }
-    fn projects_page(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
+    fn library_actions(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal_wrapped(|ui| {
             if ui
                 .add_enabled(!self.busy, egui::Button::new("+ Dự án mới"))
                 .clicked()
@@ -1515,12 +1567,59 @@ impl StudioApp {
                 self.library_cache.clear();
             }
         });
-        ui.add_space(15.0);
+    }
+    fn library_filters(&mut self, ui: &mut egui::Ui) {
+        let before_source=self.library_by_updated;
+        let before=self.library_dates.clone();
+        let _date_rects=ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y=34.;
+            ui.horizontal_wrapped(|ui|{
+            ui.label("Theo");
+            ui.selectable_value(&mut self.library_by_updated,false,"Ngày tạo dự án");
+            let _updated=ui.selectable_value(&mut self.library_by_updated,true,"Ngày cập nhật");
+            #[cfg(test)] self.hitboxes.insert("library_date_basis".into(),_updated.rect);
+            ui.add_space(12.);
+            self.library_dates.inline_ui(ui,"library_dates")
+            }).inner
+        }).inner;
+        if self.library_by_updated!=before_source {let _=write_json(&self.projects_root.parent().unwrap().join("library-date-source.json"),&self.library_by_updated);}
+        #[cfg(test)] for (i,rect) in _date_rects.into_iter().enumerate(){self.hitboxes.insert(format!("library_date_{i}"),rect);}
+        if let Some(error)=self.library_dates.error(){ui.colored_label(Color32::LIGHT_RED,error);}
+        if self.library_dates!=before {self.library_dates.save(&self.projects_root.parent().unwrap().join("library-dates.json"));}
+    }
+    fn projects_page(&mut self, ui: &mut egui::Ui) {
+        let width=ui.available_width();
+        if width>=700. {
+            ui.horizontal_top(|ui| {
+                let _left=ui.allocate_ui_with_layout(Vec2::new(220.,0.),egui::Layout::top_down(egui::Align::Min),|ui| {
+                    ui.set_width(220.);
+                    self.library_actions(ui);
+                });
+                #[cfg(test)] self.hitboxes.insert("library_header_left".into(),_left.response.rect);
+                let right_width=(width-220.-ui.spacing().item_spacing.x).max(0.);
+                let _right=ui.allocate_ui_with_layout(Vec2::new(right_width,0.),egui::Layout::top_down(egui::Align::Min),|ui| {
+                    ui.set_width(right_width);
+                    self.library_filters(ui);
+                });
+                #[cfg(test)] self.hitboxes.insert("library_header_right".into(),_right.response.rect);
+            });
+        }else{
+            self.library_actions(ui);
+            self.library_filters(ui);
+        }
+        ui.add_space(8.);
+        let today=crate::date_filter::local_parts(crate::date_filter::now()).unwrap().0;
+        let mut rows:Vec<_>=self.history.iter().filter_map(|path|self.library_cache.get(path).map(|p|(path.clone(),p))).filter(|(_,p)|{
+            self.library_dates.matches(if self.library_by_updated{p.updated_at}else{p.created_at},today)
+        }).collect();
+        rows.sort_by_key(|(_,p)|std::cmp::Reverse((if self.library_by_updated{p.updated_at}else{p.created_at},p.id.clone())));
+        ui.label(RichText::new(format!("{} / {} dự án · ngày giờ theo máy",rows.len(),self.history.len())).size(12.).color(MUTED));
+        if rows.is_empty(){ui.label(if self.history.is_empty(){"Chưa có dự án. Bấm + Dự án mới để bắt đầu."}else{"Không có dự án trong khoảng ngày này. Chọn khoảng khác hoặc Bỏ lọc."});}
+        ui.add_space(8.0);
         let mut open = None;
         let mut delete = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for path in &self.history {
-                if let Some(p) = self.library_cache.get(path) {
+            for (path,p) in &rows {
                     panel().show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
@@ -1529,10 +1628,12 @@ impl StudioApp {
                                 #[cfg(test)] self.hitboxes.insert(format!("library_title_{}", p.id), _title.rect);
                                 ui.label(
                                     RichText::new(format!(
-                                        "{} nguồn · {} cảnh · {}",
+                                        "{} nguồn · {} cảnh · {} · {}: {}",
                                         p.source_count,
                                         p.segment_count,
-                                        seconds(p.duration_ms)
+                                        seconds(p.duration_ms),
+                                        if self.library_by_updated{"Cập nhật"}else{"Tạo"},
+                                        crate::date_filter::timestamp(if self.library_by_updated{p.updated_at}else{p.created_at})
                                     ))
                                     .color(MUTED),
                                 );
@@ -1582,7 +1683,6 @@ impl StudioApp {
                         });
                     });
                     ui.add_space(10.0);
-                }
             }
         });
         if let Some(path) = open {
@@ -1764,6 +1864,7 @@ impl StudioApp {
                 .selected_text(match self.settings.cartoon_character.as_str() {
                     "portrait" => "Bán thân • hoodie xám",
                     "analyst" => "Analyst • kính / áo teal",
+                    "panda" => "Gấu trúc • nón rơm / kính đen",
                     _ => "Studio • tai nghe / áo xanh",
                 })
                 .show_ui(ui, |ui| {
@@ -1781,6 +1882,11 @@ impl StudioApp {
                         &mut self.settings.cartoon_character,
                         "analyst".into(),
                         "Analyst • kính / áo teal",
+                    );
+                    ui.selectable_value(
+                        &mut self.settings.cartoon_character,
+                        "panda".into(),
+                        "Gấu trúc • nón rơm / kính đen / áo tím",
                     );
                 });
             let preview = worker_path(&format!("cartoon-{}.png", self.settings.cartoon_character));
@@ -1803,7 +1909,7 @@ impl StudioApp {
                 ui.image(texture);
             }
             field(ui, "Rhubarb executable", &mut self.settings.rhubarb);
-            ui.label(RichText::new("Nhân vật bán thân, tay nối từ vai; cử chỉ theo lời thoại. Nhép miệng theo audio VieNeu bằng Rhubarb phonetic; chạy CPU, không cần key HeyGen. Mẫu tóc nâu giữ nét mặt ảnh gốc; Studio/Analyst có thêm chớp mắt. Đổi nhân vật dùng lại WAV. Bấm Lưu cấu hình.").color(TEAL).size(12.0));
+            ui.label(RichText::new("Tay nối từ vai; cử chỉ theo lời thoại. Nhép miệng theo audio VieNeu bằng Rhubarb phonetic; chạy CPU, không cần key HeyGen. Gấu trúc toàn thân có nón rơm, kính đen, áo choàng tím dài và chân; các mẫu còn lại bán thân. Studio/Analyst có thêm chớp mắt. Đổi nhân vật dùng lại WAV. Bấm Lưu cấu hình.").color(TEAL).size(12.0));
             return;
         }
         ui.horizontal(|ui| {
@@ -2454,6 +2560,24 @@ mod ui_tests {
         }
     }
     #[test]
+    fn disk_error_notice_fits_setup_and_preserves_raw_log() {
+        for (width,height) in [(1080.,720.),(1440.,900.)] {
+            let ctx=egui::Context::default();let mut app=StudioApp::from_context(&ctx);
+            app.capture_path=None;app.page=Page::Editor;app.setup_open=true;
+            app.message("Cảnh 8 / Avatar 2D: Error submitting a packet to the muxer: No space left on device; error code: -28",true);
+            let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width,height));
+            let mut visible=String::new();
+            for _ in 0..3 {
+                let output=ctx.run(egui::RawInput{screen_rect:Some(screen),..Default::default()},|ctx|app.draw(ctx));
+                visible=output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape{Some(t.galley.text())}else{None}).collect::<Vec<_>>().join(" ");
+            }
+            assert!(visible.contains("Không đủ dung lượng ổ đĩa") && visible.contains("Thử lại"));
+            assert!(!visible.contains("muxer"),"Technical error should stay in details / logs");
+            for key in ["setup_error","setup_run","setup_logs"] {assert!(screen.contains_rect(app.hitboxes[key]),"{key} clipped at {width}x{height}");}
+            assert!(app.logs.last().unwrap().contains("-28"));
+        }
+    }
+    #[test]
     fn unified_setup_sources_draft_preflight_and_worker_events() {
         let temp=tempfile::tempdir().unwrap();
         let ctx=egui::Context::default();
@@ -2530,6 +2654,39 @@ mod ui_tests {
         assert!(app.project.output.avatar_scale < 0.42 && app.dirty);
     }
     #[test]
+    fn library_date_filter_hides_nonmatching_projects_and_clear_restores_them() {
+        let temp=tempfile::tempdir().unwrap();let ctx=egui::Context::default();
+        let mut app=StudioApp::from_context(&ctx);app.capture_path=None;
+        app.projects_root=temp.path().join("projects");app.page=Page::Projects;
+        let mut projects=vec![];
+        for days in [0,10] {
+            let mut p=Project::default();p.root=app.projects_root.join(&p.id);p.save().unwrap();
+            let file=fs::OpenOptions::new().write(true).open(p.root.join("project.json")).unwrap();
+            file.set_times(fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH+Duration::from_secs(crate::date_filter::now()-days*86400))).unwrap();
+            projects.push(p);
+        }
+        app.history=project_store::list(&app.projects_root);app.library_by_updated=true;
+        app.library_dates.period=crate::date_filter::Period::Today;
+        for width in [1080.,1440.] {
+            app.hitboxes.clear();
+            for _ in 0..3 {let _=ctx.run(egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(width,900.))),..Default::default()},|ctx|app.draw(ctx));}
+            assert!(app.hitboxes.contains_key(&format!("library_title_{}",projects[0].id)));
+            assert!(!app.hitboxes.contains_key(&format!("library_title_{}",projects[1].id)));
+            app.library_dates.period=crate::date_filter::Period::Range;
+            for _ in 0..3 {let _=ctx.run(egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(width,900.))),..Default::default()},|ctx|app.draw(ctx));}
+            for (key,rect) in &app.hitboxes {if key.starts_with("library_date_"){assert!(rect.right()<=width && rect.left()>=0.,"{key}: {rect:?}");}}
+            let left=app.hitboxes["library_header_left"];let right=app.hitboxes["library_header_right"];
+            assert!(left.right()<=right.left(),"Library header columns must not overlap");
+            assert!((left.top()-right.top()).abs()<1.);
+            for (key,rect) in &app.hitboxes {if key.starts_with("library_date_"){assert!(right.contains_rect(*rect),"{key} outside right filter column: {rect:?}");}}
+            app.library_dates.period=crate::date_filter::Period::Today;
+        }
+        app.library_dates.period=crate::date_filter::Period::All;app.hitboxes.clear();
+        for _ in 0..3 {let _=ctx.run(egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(1440.,900.))),..Default::default()},|ctx|app.draw(ctx));}
+        assert!(app.hitboxes.contains_key(&format!("library_title_{}",projects[1].id)));
+        assert_eq!(app.library_cache.reads,2,"Filtering should reuse cached read-only summaries");
+    }
+    #[test]
     fn library_actions_have_equal_height_and_alignment_at_supported_widths() {
         let temp = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
@@ -2567,6 +2724,10 @@ mod ui_tests {
                 assert!(rects[0].right() < rects[1].left());
                 assert!(rects[1].right() < rects[2].left());
                 assert!(app.hitboxes[&format!("library_title_{}", app.project.id)].right() < rects[0].left(), "Project title must not overlap library actions");
+                let basis=app.hitboxes["library_date_basis"];
+                let period=app.hitboxes["library_date_0"];
+                assert!((basis.center().y-period.center().y).abs()<1.,"Date filter must share the basis row at {width}px: {basis:?}, {period:?}");
+                assert!(basis.right()<period.left());
             }
         }
         assert_eq!(app.library_cache.reads, 1, "Idle library frames must reuse the manifest summary");
@@ -2821,6 +2982,33 @@ mod ui_tests {
         }
     }
     #[test]
+    fn source_folder_menu_remembers_choice_and_reset_preserves_existing_sources() {
+        for width in [1080.,1440.] {
+            let temp=tempfile::tempdir().unwrap();let ctx=egui::Context::default();
+            let mut app=StudioApp::from_context(&ctx);app.capture_path=None;
+            app.projects_root=temp.path().join("projects");app.project.root=app.projects_root.join(&app.project.id);
+            let base=temp.path().join("Ổ lưu nguồn YouTube có dấu").join("Thư mục riêng cho các dự án video được tải xuống để biên tập");
+            fs::create_dir_all(&base).unwrap();let original=base.join("existing.mp4");fs::write(&original,b"keep original").unwrap();
+            app.project.sources=vec![Source{path:original.clone(),url:"https://youtu.be/dBy-8s6ly08".into(),..Default::default()}];
+            app.remember_source_folder(Some(base.clone()));assert!(!app.is_error,"{}",app.notice);
+            let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width,720.));
+            let draw=|app:&mut StudioApp,events|{let _=ctx.run(egui::RawInput{screen_rect:Some(screen),events,..Default::default()},|ctx|app.draw(ctx));};
+            for _ in 0..3 {draw(&mut app,vec![]);}
+            let pos=app.hitboxes["top_export_location"].center();
+            for pressed in [true,false]{draw(&mut app,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);}
+            for _ in 0..3 {draw(&mut app,vec![]);}
+            for key in ["export_change_folder","source_change_folder","source_reset_folder","export_metadata_open"] {
+                assert!(screen.contains_rect(app.hitboxes[key]),"{key} overflow at {width}: {:?}",app.hitboxes[key]);
+            }
+            let pos=app.hitboxes["source_reset_folder"].center();
+            for pressed in [true,false]{draw(&mut app,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);}
+            assert!(app.settings.youtube_download_folder.is_empty());
+            assert!(Settings::load(&temp.path().join("settings.json")).unwrap().youtube_download_folder.is_empty());
+            assert_eq!(app.project.sources[0].path,original);assert_eq!(fs::read(original).unwrap(),b"keep original");
+            assert!(app.export_location.folder().is_none(),"Source destination must not change MP4 export selection");
+        }
+    }
+    #[test]
     fn export_location_native_toolbar_and_real_mp4_use_saved_folder() {
         let temp = tempfile::tempdir().unwrap();
         let ctx = egui::Context::default();
@@ -2847,6 +3035,10 @@ mod ui_tests {
         frame(&mut app, &ctx, vec![]);
         click(&mut app, &ctx, "top_export_location");
         assert!(app.hitboxes.contains_key("export_change_folder"));
+        for key in ["source_change_folder","source_reset_folder"] {
+            assert!(app.hitboxes.contains_key(key));
+            assert!(app.hitboxes[key].bottom()<720.,"Storage menu must fit the minimum window");
+        }
         frame(&mut app, &ctx, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
 
         let settings = Settings::default();
@@ -3028,8 +3220,12 @@ mod ui_tests {
             .unwrap()
             .0
             .ends_with("cartoon-analyst.png"));
+        app.settings.cartoon_character = "panda".into();
+        frame(&mut app, &ctx, vec![]);
+        assert!(app.avatar_preview.as_ref().unwrap().0.ends_with("cartoon-panda.png"));
         let roundtrip: Settings =
             serde_json::from_str(&serde_json::to_string(&app.settings).unwrap()).unwrap();
         assert_eq!(roundtrip.avatar_provider, "cartoon2d");
+        assert_eq!(roundtrip.cartoon_character, "panda");
     }
 }

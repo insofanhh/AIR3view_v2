@@ -445,6 +445,7 @@ impl StudioApp {
                                 "analyst" => "Analyst • kính / áo teal",
                                 "studio" => "Studio • tai nghe",
                                 "portrait" => "Bán thân • hoodie xám",
+                                "panda" => "Gấu trúc • nón rơm / kính đen",
                                 _ => "Chọn nhân vật",
                             })
                             .show_ui(ui, |ui| {
@@ -452,6 +453,7 @@ impl StudioApp {
                                     ("portrait", "Bán thân • hoodie xám"),
                                     ("studio", "Studio • tai nghe"),
                                     ("analyst", "Analyst • kính / áo teal"),
+                                    ("panda", "Gấu trúc • nón rơm / kính đen / áo tím"),
                                 ] {
                                     ui.selectable_value(
                                         &mut p.cartoon_character,
@@ -665,11 +667,15 @@ impl StudioApp {
             }
         }
         if self.is_error && !self.notice.is_empty() {
-            let summary=self.notice.chars().take(190).collect::<String>();
+            let summary=crate::diagnostics::friendly_error(&self.notice)
+                .unwrap_or_else(||self.notice.chars().take(190).collect::<String>());
             let _error=ui.add(egui::Label::new(RichText::new(summary).color(Color32::LIGHT_RED).size(12.)).wrap());
             #[cfg(test)] self.hitboxes.insert("setup_error".into(),_error.rect);
             egui::CollapsingHeader::new("Chi tiết lỗi / vị trí cần sửa").show(ui,|ui|{
-                egui::ScrollArea::vertical().max_height(130.).show(ui,|ui|{ui.label(&self.notice);});
+                egui::ScrollArea::vertical().max_height(130.).show(ui,|ui|{
+                    ui.add(egui::Label::new(format!("Thư mục dự án: {}",self.project.root.display())).wrap());
+                    ui.add(egui::Label::new(crate::diagnostics::safe_text(&self.notice,&[])).wrap());
+                });
             });
         }
         if !self.project.script_warnings.is_empty() {

@@ -11,10 +11,55 @@ from functools import lru_cache
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw
-from gesture_rig import draw_half_body, plan_gestures
+from gesture_rig import draw_half_body, draw_robe_body, plan_gestures
 
 SHAPES = {"X": (19, 1), "A": (18, 2), "B": (23, 7), "C": (23, 16),
           "D": (24, 25), "E": (16, 17), "F": (10, 13), "G": (21, 9), "H": (22, 19)}
+
+
+@lru_cache(maxsize=1)
+def panda_base():
+    # This fixed sprite has an intentionally empty mouth area below the nose.
+    with Image.open(Path(__file__).with_name("panda-head.png")) as source:
+        source = source.convert("RGBA")
+        source.thumbnail((276, 276), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", (512, 512))
+        canvas.alpha_composite(source, ((512-source.width)//2, 5))
+        return canvas
+
+
+def panda_frame(t, cues, emotion, size, gestures):
+    head = panda_base().copy()
+    draw = ImageDraw.Draw(head)
+    shape, (mw, mh) = mouth_at(cues, t)
+    x, y = 256, 221
+    mw, mh = mw*.85, mh*.85
+    if mh < 4:
+        curve = [(x-mw+2*mw*i/24, y+4*(1-((i-12)/12)**2)) for i in range(25)]
+        draw.line(curve, fill="#17171C", width=3, joint="curve")
+    else:
+        draw.ellipse((x-mw, y-mh*.5, x+mw, y+mh), fill="#34212A", outline="#17171C", width=3)
+        if shape in ["B", "C", "D", "G", "H"]:
+            draw.rounded_rectangle((x-mw+4, y-mh*.5+3, x+mw-4, y-mh*.5+7), 2, fill="#FFFCFA")
+        if shape in ["C", "D", "H"]:
+            draw.ellipse((x-mw*.5, y+mh*.4, x+mw*.5, y+mh*.85), fill="#CD7581")
+    angle = math.sin(t*2.4)*.9
+    if emotion == "surprised":
+        angle += math.sin(t*8)*1.8*max(0, 1-t/.6)
+    head = head.rotate(angle, Image.Resampling.BICUBIC, center=(256, 242),
+                       expand=False, fillcolor=(0, 0, 0, 0))
+    # Keep the existing shoulder/face rig at its original scale; extend the
+    # canvas downward rather than squeezing a full robe into the old square.
+    image = Image.new("RGBA", (512, 704))
+    draw_robe_body(ImageDraw.Draw(image), t, gestures)
+    image.alpha_composite(head, (0, round(math.sin(t*3))))
+    return image if size == 512 else image.resize(frame_dimensions("panda", size), Image.Resampling.LANCZOS)
+
+
+def frame_dimensions(character, size):
+    # Even dimensions remain compatible with downstream video encoders.
+    height = 2*round(size*704/512/2) if character == "panda" else size
+    return size, height
 
 
 @lru_cache(maxsize=1)
@@ -100,6 +145,8 @@ def frame(t, cues, emotion="curious", character="studio", size=512, gestures=Non
         gestures = plan_gestures("Lời bình giải thích tình huống", [], cues, emotion, "auto", max((c["end"] for c in cues), default=1))
     if character == "portrait":
         return portrait_frame(t, cues, emotion, size, gestures)
+    if character == "panda":
+        return panda_frame(t, cues, emotion, size, gestures)
     image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
     d = ImageDraw.Draw(image)
     ink = "#172235"
@@ -167,8 +214,9 @@ def render(job):
     assert 0 < duration <= 3600 and 1 <= fps <= 30 and 128 <= size <= 768
     output = Path(job["output"])
     temp = output.with_suffix(".pending.mkv")
+    width, height = frame_dimensions(job.get("character", "studio"), size)
     command = [job["ffmpeg"], "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgba",
-               "-s", f"{size}x{size}", "-r", str(fps), "-i", "pipe:0", "-an", "-t", str(duration),
+               "-s", f"{width}x{height}", "-r", str(fps), "-i", "pipe:0", "-an", "-t", str(duration),
                "-c:v", "ffv1", "-pix_fmt", "bgra", str(temp)]
     # Inherit stderr so the Rust process runner can drain it and kill the whole process tree.
     proc = subprocess.Popen(command, stdin=subprocess.PIPE, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

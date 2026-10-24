@@ -15,9 +15,9 @@ pub fn generate(s: &Settings, seg: &Segment, folder: &Path, cancel: &Cancel) -> 
     ensure!(
         matches!(
             s.cartoon_character.as_str(),
-            "portrait" | "studio" | "analyst"
+            "portrait" | "studio" | "analyst" | "panda"
         ),
-        "Chọn nhân vật 2D Chân dung, Studio hoặc Analyst"
+        "Chọn nhân vật 2D Chân dung, Studio, Analyst hoặc Gấu trúc"
     );
     let audio = seg
         .audio
@@ -81,6 +81,11 @@ pub fn generate(s: &Settings, seg: &Segment, folder: &Path, cancel: &Cancel) -> 
         let _ = fs::remove_file(wav);
     }
     let worker = worker_path("cartoon_render.py");
+    let head_asset = worker_path(if s.cartoon_character == "panda" {
+        "panda-head.png"
+    } else {
+        "portrait-base.png"
+    });
     let key = media::hash(format!(
         "cartoon-rig-v5-halfbody:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
         lips_key,
@@ -88,7 +93,7 @@ pub fn generate(s: &Settings, seg: &Segment, folder: &Path, cancel: &Cancel) -> 
         seg.emotion,
         seg.duration_ms,
         crate::input_assets::file_fingerprint(&worker.to_string_lossy()),
-        crate::input_assets::file_fingerprint(&worker_path("portrait-base.png").to_string_lossy()),
+        crate::input_assets::file_fingerprint(&head_asset.to_string_lossy()),
         crate::input_assets::file_fingerprint(&worker_path("gesture_rig.py").to_string_lossy()),
         seg.gesture,
         seg.narration,
@@ -113,7 +118,9 @@ pub fn generate(s: &Settings, seg: &Segment, folder: &Path, cancel: &Cancel) -> 
     )?;
     let info = media::probe(s, &output, cancel)?;
     ensure!(
-        info.width == 512 && info.height == 512 && info.duration_ms.abs_diff(seg.duration_ms) < 100,
+        info.width == 512
+            && info.height == if s.cartoon_character == "panda" { 704 } else { 512 }
+            && info.duration_ms.abs_diff(seg.duration_ms) < 100,
         "Video nhân vật 2D sai kích thước/thời lượng"
     );
     Ok(output)
