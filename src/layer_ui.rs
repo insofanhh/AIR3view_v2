@@ -10,7 +10,6 @@ pub(super) struct LayerView {
     pub alpha:BTreeMap<String,image::GrayImage>,
     pub(super) selected:Option<String>,
     drag:Option<LayerDrag>,
-    free_aspect:bool,
     pub(super) clipboard:Option<Vec<crate::composition::LayerClip>>,
 }
 struct LayerDrag {before:Project,transform:Transform,origin:Pos2,mode:u8}
@@ -60,6 +59,7 @@ impl StudioApp {
         }
     }
     pub(super) fn transform_changed(&mut self) {
+        if let Some(id) = self.layers.selected.clone() { self.project.remember_layer_parameters(&id); }
         self.layers.managed_edit=true;
         self.dirty=true;self.project.rendered=None;
         self.player.update_audio(&self.project);
@@ -67,6 +67,7 @@ impl StudioApp {
     }
     pub(super) fn set_layer_transform(&mut self,id:&str,t:Transform) {
         if self.project.apply_layer_transform(id,&t) {
+            self.project.remember_layer_parameters(id);
             self.transform_changed();
         }
     }
@@ -126,7 +127,7 @@ impl StudioApp {
             if let (Some(drag),Some(id),Some(pos))=(&self.layers.drag,self.layers.selected.clone(),response.interact_pointer_pos()) {
                 let mut t=drag.transform.clone();let d=pos-drag.origin;
                 match drag.mode {
-                    3..=10 if self.layers.free_aspect=>{
+                    3..=10 if self.project.layer_defaults.free_aspect=>{
                         let center=canvas.min+Vec2::new(t.x*canvas.width(),t.y*canvas.height());let d=pos-center;
                         let (s,c)=(-t.rotation).to_radians().sin_cos();let (x,y)=(d.x*c-d.y*s,d.x*s+d.y*c);let handle=drag.mode-3;
                         if handle%2==0 || handle==3 || handle==7 {t.width=(x.abs()*2./canvas.width()).clamp(0.01,10.);}
@@ -176,6 +177,8 @@ impl StudioApp {
             egui::ComboBox::from_id_salt("selected_layer").selected_text(self.layers.selected.as_ref().and_then(|id|clips.iter().find(|c|&c.id==id)).map(|c|composition::label(&self.project,c)).unwrap_or_else(||"Chọn layer…".into()))
                 .show_ui(ui,|ui|{for c in &clips{ui.selectable_value(&mut self.layers.selected,Some(c.id.clone()),composition::label(&self.project,c));}});
         });
+        ui.label(RichText::new("Tự nhớ thông số layer cho dự án mới.").size(11.).color(MUTED))
+            .on_hover_text("Nhớ vị trí, kích thước, xoay, độ hiện, thứ tự, âm lượng/fade và tùy chọn đồng bộ. Bố cục Host và review được lưu riêng.");
         let Some(id)=self.layers.selected.clone() else {ui.label(RichText::new("Chọn layer trên canvas hoặc timeline.").color(MUTED));ui.separator();return;};
         let Some(c)=self.project.composition.as_ref().unwrap().clips.iter().find(|c|c.id==id).cloned() else{return;};
         let before=self.project.clone();let mut t=c.transform.clone();let (w,h)=self.project.output.dimensions();let (mut x,mut y)=t.pixels(w,h);
@@ -201,7 +204,12 @@ impl StudioApp {
                     rx.changed()||ry.changed()
                 }).inner;
                 if position_changed {t.set_pixels(x,y,w,h);}
-                ui.checkbox(&mut self.layers.free_aspect,"Co giãn tự do (bỏ khóa tỉ lệ)");
+                let aspect=ui.checkbox(&mut self.project.layer_defaults.free_aspect,"Co giãn tự do (bỏ khóa tỉ lệ)");
+                #[cfg(test)] self.hitboxes.insert("layer_free_aspect".into(),aspect.rect);
+                if aspect.changed() {
+                    self.dirty=true; self.layers.managed_edit=true;
+                    self.timeline_view.history.record(before.clone());
+                }
                 let old_width=t.width;
                 ui.add(egui::Slider::new(&mut t.width,0.01..=3.).text("Rộng / khung"));
                 if (old_width-t.width).abs()>f32::EPSILON{t.height*=t.width/old_width;}
@@ -210,7 +218,7 @@ impl StudioApp {
                 ui.horizontal_wrapped(|ui|{
                     if ui.button("Căn giữa").clicked(){t.x=0.5;t.y=0.5;}
                     if ui.button("Đưa về khung").clicked(){t.x=t.x.clamp(t.width.min(1.)/2.,1.-t.width.min(1.)/2.);t.y=t.y.clamp(t.height.min(1.)/2.,1.-t.height.min(1.)/2.);}
-                    if ui.button("Reset").clicked(){if let Some(base)=composition::Composition::from_project(&self.project).clips.iter().find(|v|v.id==id){t=base.transform.clone();}}
+                    if ui.button("Reset").clicked(){let mut factory=self.project.clone();factory.layer_defaults=Default::default();if let Some(base)=composition::Composition::from_project(&factory).clips.iter().find(|v|v.id==id){t=base.transform.clone();}}
                     if c.track==crate::timeline::AVATAR && ui.button("Đúng tỉ lệ gốc").on_hover_text("Fit nhân vật trong vùng hiện tại, giữ vị trí và góc xoay").clicked(){t.contain_aspect(composition::avatar_aspect(c.media.as_deref()),w,h);}
                 });
             }
@@ -280,6 +288,40 @@ impl StudioApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn layer_ui_preferences_persist_and_new_project_uses_them_with_fresh_layers() {
+        for width in [240., 308., 560.] {
+            let temp=tempfile::tempdir().unwrap(); let ctx=egui::Context::default();
+            let mut app=StudioApp::from_context(&ctx); app.capture_path=None; app.player.stop();
+            app.projects_root=temp.path().join("projects");
+            app.project=Project { root:app.projects_root.join("old"),
+                sources:vec![Source{id:"source".into(),width:640,height:360,..Default::default()}],
+                segments:vec![Segment{id:"scene".into(),source_id:"source".into(),kind:"host".into(),duration_ms:4000,..Default::default()}],..Default::default() };
+            app.project.ensure_composition(); app.layers.selected=Some("scene-1".into());
+            let transform=Transform{x:0.6,y:0.78,width:0.8,height:0.45,rotation:12.,opacity:0.85};
+            app.set_layer_transform("scene-1",transform.clone());
+            let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width+24.,1200.));
+            let draw=|app:&mut StudioApp,events| {let _=ctx.run(egui::RawInput{screen_rect:Some(screen),events,..Default::default()},|ctx| {
+                egui::CentralPanel::default().show(ctx,|ui|app.layer_inspector(ui));
+            });};
+            draw(&mut app,vec![]);draw(&mut app,vec![]);
+            let rect=app.hitboxes["layer_free_aspect"]; assert!(screen.contains_rect(rect));
+            assert!(!rect.intersects(app.hitboxes["layer_x"]));
+            let pos=rect.center();
+            draw(&mut app,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:true,modifiers:egui::Modifiers::NONE},egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:false,modifiers:egui::Modifiers::NONE}]);
+            assert!(app.project.layer_defaults.free_aspect && app.dirty);
+            app.project.timeline.tracks[crate::timeline::AVATAR].sync_parameters=true;
+            app.remember_project_defaults().unwrap();
+            let defaults=ProjectDefaults::load(&temp.path().join("project-defaults.json")).unwrap();
+            assert_eq!(defaults.layer_defaults.presets["host:1:"].transform,transform);
+            app.new_project();
+            assert!(app.layers.selected.is_none() && app.project.segments.is_empty());
+            assert!(app.project.layer_defaults.free_aspect && app.project.timeline.tracks[crate::timeline::AVATAR].sync_parameters);
+            app.project.segments=vec![Segment{id:"new-scene".into(),kind:"host".into(),duration_ms:5000,..Default::default()}];
+            app.project.ensure_composition();
+            assert_eq!(app.project.composition.as_ref().unwrap().clips.iter().find(|c|c.id=="new-scene-1").unwrap().transform,transform);
+        }
+    }
     #[test]
     fn sync_checkbox_is_per_track_applies_immediately_and_is_one_undo() {
         use crate::timeline;

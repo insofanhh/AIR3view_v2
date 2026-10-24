@@ -221,8 +221,7 @@ impl StudioApp {
         let history = project_store::list(&root.join("projects"));
         let (tx, rx) = mpsc::channel();
         let mut project = Project::default();
-        if let Some(defaults) = ProjectDefaults::load(&root.join("project-defaults.json"))
-            .or_else(|| history.first().and_then(|path| Project::load(path).ok()).map(|p| ProjectDefaults::from_project(&p))) {
+        if let Some(defaults) = ProjectDefaults::load_with_layer_fallback(&root.join("project-defaults.json"), history.first().map(|p| p.as_path())) {
             defaults.apply(&mut project);
         }
         project.root = root.join("projects").join(&project.id);
@@ -340,6 +339,7 @@ impl StudioApp {
         ProjectDefaults::from_project(&self.project).apply(&mut p);
         p.root = self.projects_root.join(&p.id);
         self.project = p;
+        self.layers = Default::default();
         self.page = Page::Editor;
         self.setup_open = true;
         self.workflow_state = None;
@@ -381,9 +381,12 @@ impl StudioApp {
             Err(e) => self.message(format!("Không lưu được project: {e:#}"), true),
         }
     }
-    fn remember_project_defaults(&self) -> anyhow::Result<()> {
+    fn remember_project_defaults(&mut self) -> anyhow::Result<()> {
         let root = self.projects_root.parent().context("Thiếu thư mục cấu hình")?;
-        write_json(&root.join("project-defaults.json"), &ProjectDefaults::from_project(&self.project))
+        let defaults = ProjectDefaults::from_project(&self.project);
+        write_json(&root.join("project-defaults.json"), &defaults)?;
+        self.project.layer_defaults = defaults.layer_defaults;
+        Ok(())
     }
     fn restore_job_notice(&mut self) {
         self.notice.clear();self.is_error=false;
@@ -2052,6 +2055,16 @@ fn worker_path(name: &str) -> PathBuf {
 impl StudioApp {
     fn draw(&mut self, ctx: &egui::Context) {
         self.updates.poll();
+        self.advance_update(ctx);
+        if self.updates.installer.launching.is_some() {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.heading("Đang cập nhật AIR3view");
+                ui.spinner();
+                ui.label(&self.updates.installer.message);
+            });
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
         self.update_banner(ctx);
         let production = crate::workflow::effective_settings(&self.project, &self.settings);
         if self.page == Page::Editor && production.avatar_provider == "cartoon2d" {

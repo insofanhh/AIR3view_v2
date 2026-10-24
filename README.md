@@ -1,6 +1,6 @@
 # AIR3view
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.2. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.3. Preview, timeline và các layer nằm ngay trong app.
 
 ## Khởi chạy
 
@@ -22,8 +22,9 @@ App dùng lại VieNeu đang chạy nếu API hỗ trợ giọng tham chiếu v�
 ## Cập nhật và phát hành tự động
 
 - App kiểm tra repo công khai ở luồng nền khi mở và mỗi 15 phút, không khóa UI. Có nút **Cập nhật** cuối menu trái (menu thu gọn: **UPD**), bật/tắt tự kiểm tra và kiểm tra thủ công.
-- Có commit mới trên `main`: thông báo bản tải đang chuẩn bị. Khi release mới có ZIP Windows: hiện nút tải và ghi chú phát hành. Khi mất mạng/GitHub giới hạn request, app vẫn hoạt động bình thường.
-- Giải nén bản mới vào thư mục mới; dự án/cấu hình trong AppData được giữ lại. Lần đầu bản mới có thể cần cài worker, dùng lại cache model theo cấu hình máy.
+- Có commit mới trên `main`: thông báo bản tải đang chuẩn bị. Khi release mới có ZIP Windows và SHA256: hiện nút **Cập nhật** cùng ghi chú phát hành. Bấm một lần để tải nền, kiểm tra SHA256 của ZIP và từng file trong manifest, tự thay file thay đổi/bổ sung file thiếu ngay trong thư mục app rồi mở lại. Cần mạng, dung lượng cho ZIP, file giải nén và bản sao khôi phục, cùng quyền ghi thư mục app.
+- Chỉ cài khi tác vụ đã hoàn tất; tự lưu dự án/cài đặt trước khi đóng. Giữ dự án/cấu hình trong AppData, `.venv`, model, cookie và các file riêng ngoài gói. Python tự bổ sung thư viện khi bộ khóa thay đổi. Lỗi tải/kiểm tra không thay file hiện tại; lỗi cài sẽ khôi phục các file đã thay và mở lại bản cũ. Nhật ký/kết quả ở `%LOCALAPPDATA%\ReactionStudio\logs\update-last.json`; bản sao khi lỗi nằm trong `.air3view-update-…` của thư mục app.
+- Máy dùng bản cũ chỉ có nút tải ZIP cần cài bản có tính năng này một lần. Những lần sau dùng nút **Cập nhật**, không cần giải nén thủ công. Khi mất mạng/GitHub giới hạn request, app vẫn hoạt động bình thường.
 - `.github/workflows/release.yml`: mỗi push `main` chạy test/Clippy, build EXE với CRT tĩnh, đóng gói và kiểm tra render hai tỉ lệ trước khi công bố release. Cần GitHub Actions được bật và token workflow có `contents: write`.
 - `release.json` ghi version/tag/commit/thời gian build; `package-manifest.json` chứa hash các file runtime. Release kèm `SHA256SUMS.txt` cho ZIP. Bản đầu dùng tag theo Cargo, những lần tiếp theo dùng hậu tố `-build.<số workflow>`.
 
@@ -73,6 +74,7 @@ Tác vụ có checkpoint. Sau lỗi/mở lại app, dùng **Tiếp tục bước
 - Timeline có trim, split, sắp xếp cảnh/layer, ẩn/khóa, volume/fade và Undo/Redo. Chỉnh layer/preview không cần encode lại MP4.
 - **Cảnh → LAYER → Đồng bộ thông số với các layer cùng loại**: lấy layer đang chọn làm mẫu; bỏ qua layer/nhóm/cảnh khóa. Hình đồng bộ transform/thứ tự, âm thanh đồng bộ gain/fade. Nội dung, nguồn và thời gian clip giữ riêng.
 - Nhân vật kéo thả trong preview hoặc nhập X/Y. Vị trí sub X/Y điều chỉnh ±2000 px theo kích thước đầu ra.
+- Thông số layer tự được nhớ khi lưu/tự lưu, tạo dự án mới hoặc đóng app: X/Y, kích thước, xoay, độ hiện, thứ tự, âm lượng/fade, co giãn tự do và tick đồng bộ. Dự án sau dùng lại theo loại layer và cảnh Host/review riêng; các ảnh dẫn chứng giữ vị trí thứ tự riêng. Media, nội dung, timing, trạng thái khóa/ẩn không được chép sang dự án mới.
 - Ảnh/số liệu dẫn chứng xuất hiện sau Host, có bố cục/chuyển động/SFX. Khi đổi crop %, dùng **Tạo thẻ / cập nhật ảnh dẫn chứng**. Số liệu cần đối chiếu với nguồn.
 - Tiếng gốc nền lấy đoạn review đang chiếu; hook/đoạn gốc xen kẽ có gain riêng. Cảnh Host không tự lấy audio từ đoạn khác.
 - Cache hình được dùng lại khi chỉ sửa âm thanh/metadata. Khi xuất, các thay đổi hình được dựng theo phần bị ảnh hưởng; tốc độ phụ thuộc máy và nội dung.
@@ -93,8 +95,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1 -SkipB
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-source.ps1
 ```
 
-- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.2-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
-- Source sạch: `dist/AIR3view-0.2.2-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
+- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.3-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
+- Source sạch: `dist/AIR3view-0.2.3-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
 - Package dùng danh sách runtime và ghi SHA256 trong `package-manifest.json`. Không sinh bản EXE dự phòng. Có file lạ ở thư mục đích thì script báo lỗi để tránh đưa nhầm vào release.
 - Giữ `Cargo.lock`. Unit test nằm trong module Rust, chỉ biên dịch khi chạy `scripts/build.cmd test --release --lib --locked`; không nằm trong EXE release.
 - `.gitignore` loại build/dist/runtime/dữ liệu local. Không commit key, cookie hay cấu hình cá nhân.

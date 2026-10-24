@@ -29,6 +29,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/build.cmd clippy --release --all-targets --locked -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify automatic update and rollback
+        shell: powershell
+        run: ./scripts/verify-updater.ps1
       - name: Build and package
         shell: powershell
         run: |

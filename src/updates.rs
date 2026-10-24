@@ -25,7 +25,7 @@ impl BuildInfo {
 pub enum Status {
     Current,
     Code { commit: String, url: String },
-    Release { tag: String, url: String, download: String },
+    Release { tag: String, url: String, download: String, checksum: String },
 }
 #[derive(Deserialize)]
 struct Asset { name: String, browser_download_url: String }
@@ -50,6 +50,11 @@ fn official(url: &str, prefix: &str) -> bool {
     url::Url::parse(url).is_ok_and(|u| u.scheme() == "https" && u.host_str() == Some("github.com")
         && u.username().is_empty() && u.password().is_none() && u.path().starts_with(prefix))
 }
+fn version_triplet(version: &str) -> Option<[u64; 3]> {
+    let mut parts = version.trim_start_matches('v').split(['-', '+']).next()?.split('.');
+    let result = [parts.next()?.parse().ok()?, parts.next()?.parse().ok()?, parts.next()?.parse().ok()?];
+    parts.next().is_none().then_some(result)
+}
 fn get<T: serde::de::DeserializeOwned>(client: &reqwest::blocking::Client, url: &str) -> Result<Option<T>> {
     let response = client.get(url).send()?;
     if response.status() == reqwest::StatusCode::NOT_FOUND { return Ok(None); }
@@ -69,13 +74,20 @@ fn check_at(build: &BuildInfo, api: &str) -> Result<Status> {
     let release: Option<Release> = get(&client, &format!("{api}/releases/latest"))?;
     if let Some(release) = release {
         let newer = build.built_at.is_empty() || release.published_at.as_deref().is_some_and(|d| d > build.built_at.as_str());
+        let not_older_version = version_triplet(&release.tag_name).zip(version_triplet(&build.version))
+            .is_none_or(|(available, installed)| available >= installed);
         if !release.draft && !release.prerelease && release.tag_name != build.tag
-            && (build.commit.is_empty() || release.target_commitish != build.commit) && newer
+            && (build.commit.is_empty() || release.target_commitish != build.commit) && newer && not_older_version
             && official(&release.html_url, "/insofanhh/AIR3view_v2/releases/tag/") {
             if let Some(asset) = release.assets.iter().find(|a| a.name.starts_with("AIR3view-")
                 && a.name.ends_with("-windows-x64.zip")
                 && official(&a.browser_download_url, "/insofanhh/AIR3view_v2/releases/download/")) {
-                return Ok(Status::Release { tag: release.tag_name, url: release.html_url, download: asset.browser_download_url.clone() });
+                let checksum = release.assets.iter().find(|a| a.name == "SHA256SUMS.txt"
+                    && a.browser_download_url == format!("{REPOSITORY}/releases/download/{}/SHA256SUMS.txt", release.tag_name));
+                if let Some(checksum) = checksum {
+                    return Ok(Status::Release { tag: release.tag_name, url: release.html_url,
+                        download: asset.browser_download_url.clone(), checksum: checksum.browser_download_url.clone() });
+                }
             }
         }
     }
@@ -94,6 +106,7 @@ pub fn check(build: &BuildInfo) -> Result<Status> { check_at(build, API).context
 #[derive(Deserialize, Serialize)]
 struct Preferences { automatic: bool }
 pub struct Updates {
+    pub installer: crate::updater::Installer,
     pub build: BuildInfo,
     pub automatic: bool,
     pub open: bool,
@@ -108,7 +121,14 @@ pub struct Updates {
 impl Updates {
     pub fn new(path: PathBuf) -> Self {
         let automatic = fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Preferences>(&b).ok()).is_none_or(|p| p.automatic);
-        Self { build: BuildInfo::installed(), automatic, open:false, status:None, error:None, checking:false,
+        let mut installer = crate::updater::Installer::default();
+        let report = path.parent().unwrap_or(std::path::Path::new(".")).join("logs/update-last.json");
+        if let Some(result) = fs::read(&report).ok().and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok()) {
+            installer.message = result["message"].as_str().unwrap_or_default().into();
+            installer.error = result["status"].as_str() == Some("error");
+        }
+        let open = installer.error;
+        Self { installer, build: BuildInfo::installed(), automatic, open, status:None, error:None, checking:false,
             dismissed:None, path, rx:None, last_check:None }
     }
     pub fn save(&self) -> Result<()> {
@@ -123,12 +143,13 @@ impl Updates {
         std::thread::spawn(move||{let _=tx.send(check(&build).map_err(|e|format!("{e:#}")));});
     }
     pub fn poll(&mut self) {
+        self.installer.poll();
         if let Some(result)=self.rx.as_ref().and_then(|rx|rx.try_recv().ok()) {
             self.checking=false;self.rx=None;
             match result { Ok(status)=>{self.status=Some(status);self.error=None;},Err(e)=>self.error=Some(e) }
         }
         #[cfg(not(test))]
-        if self.automatic && !self.checking && self.last_check.is_none_or(|t|t.elapsed()>=Duration::from_secs(900)) { self.start(); }
+        if self.automatic && !self.checking && !self.installer.active && self.last_check.is_none_or(|t|t.elapsed()>=Duration::from_secs(900)) { self.start(); }
     }
     pub fn banner(&self) -> Option<&Status> {
         self.status.as_ref().filter(|s|**s!=Status::Current && self.dismissed.as_ref()!=Some(*s))
@@ -152,8 +173,19 @@ mod tests {
         });base
     }
     fn build() -> BuildInfo { BuildInfo { tag:"v0.2.0".into(),commit:"old".into(),built_at:"2026-01-02T00:00:00Z".into(),..Default::default() } }
-    fn release() -> serde_json::Value { serde_json::json!({"tag_name":"v0.2.1","target_commitish":"new","published_at":"2026-01-03T00:00:00Z","html_url":format!("{REPOSITORY}/releases/tag/v0.2.1"),"draft":false,"prerelease":false,"assets":[{"name":"AIR3view-0.2.1-windows-x64.zip","browser_download_url":format!("{REPOSITORY}/releases/download/v0.2.1/AIR3view-0.2.1-windows-x64.zip")}]}) }
+    fn release() -> serde_json::Value { serde_json::json!({"tag_name":"v0.2.1","target_commitish":"new","published_at":"2026-01-03T00:00:00Z","html_url":format!("{REPOSITORY}/releases/tag/v0.2.1"),"draft":false,"prerelease":false,"assets":[{"name":"AIR3view-0.2.1-windows-x64.zip","browser_download_url":format!("{REPOSITORY}/releases/download/v0.2.1/AIR3view-0.2.1-windows-x64.zip")},{"name":"SHA256SUMS.txt","browser_download_url":format!("{REPOSITORY}/releases/download/v0.2.1/SHA256SUMS.txt")}]}) }
     #[test] fn ready_release_has_a_download() { assert!(matches!(check_at(&build(),&fixture(release(),serde_json::Value::Null)).unwrap(),Status::Release{..})); }
+    #[test] fn missing_build_metadata_never_offers_an_older_version() {
+        let build=BuildInfo { version:"0.2.3".into(), ..Default::default() };
+        assert_eq!(check_at(&build,&fixture(release(),serde_json::Value::Null)).unwrap(),Status::Current);
+        assert_eq!(version_triplet("v0.2.3-build.1"), Some([0,2,3]));
+    }
+    #[test] fn release_without_matching_checksums_cannot_be_installed() {
+        let mut r=release();r["assets"].as_array_mut().unwrap().pop();
+        assert_eq!(check_at(&build(),&fixture(r,serde_json::Value::Null)).unwrap(),Status::Current);
+        let mut r=release();r["assets"][1]["browser_download_url"]="https://example.com/SHA256SUMS.txt".into();
+        assert_eq!(check_at(&build(),&fixture(r,serde_json::Value::Null)).unwrap(),Status::Current);
+    }
     #[test] fn commits_notify_while_binary_is_pending() {
         let c=serde_json::json!({"sha":"next123456","html_url":format!("{REPOSITORY}/commit/next123456"),"commit":{"committer":{"date":"2026-01-03T00:00:00Z"}}});
         assert!(matches!(check_at(&build(),&fixture(serde_json::Value::Null,c)).unwrap(),Status::Code{..}));

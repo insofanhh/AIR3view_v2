@@ -548,6 +548,7 @@ pub struct Project {
     pub input_urls: String,
     pub production: Option<ProductionSettings>,
     pub composition: Option<crate::composition::Composition>,
+    pub layer_defaults: crate::layer_defaults::LayerDefaults,
     pub evidence_settings: crate::evidence::EvidenceSettings,
     #[serde(default="crate::export_metadata::legacy_settings")]
     pub export_metadata: crate::export_metadata::MetadataSettings,
@@ -594,6 +595,7 @@ impl ProductionSettings {
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct ProjectDefaults {
+    pub layer_defaults: crate::layer_defaults::LayerDefaults,
     pub rules: ScriptRules,
     pub output: OutputSettings,
     pub subtitles: SubtitleStyle,
@@ -608,9 +610,13 @@ impl ProjectDefaults {
         rules.required_ranges.clear();
         rules.excluded_ranges.clear();
         let export_metadata=crate::export_metadata::MetadataSettings{title:String::new(),creation_time:String::new(),..p.export_metadata.clone()};
-        Self { rules, output: p.output.clone(), subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),export_metadata }
+        Self { layer_defaults: crate::layer_defaults::LayerDefaults::from_project(p), rules, output: p.output.clone(), subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),export_metadata }
     }
     pub fn apply(&self, p: &mut Project) {
+        p.layer_defaults = self.layer_defaults.clone();
+        for (track, sync) in p.timeline.tracks.iter_mut().zip(&self.layer_defaults.sync_parameters) {
+            track.sync_parameters = *sync;
+        }
         p.rules = self.rules.clone();
         p.rules.migrate_prompt();
         p.rules.required_ranges.clear();
@@ -623,6 +629,17 @@ impl ProjectDefaults {
     }
     pub fn load(path: &Path) -> Option<Self> {
         serde_json::from_slice(&fs::read(path).ok()?).ok()
+    }
+    pub fn load_with_layer_fallback(path: &Path, recent_project: Option<&Path>) -> Option<Self> {
+        let mut saved = Self::load(path);
+        if saved.as_ref().is_none_or(|d| !d.layer_defaults.initialized) {
+            if let Some(previous) = recent_project.and_then(|path| Project::load(path).ok()) {
+                let previous = Self::from_project(&previous);
+                if let Some(saved) = &mut saved { saved.layer_defaults = previous.layer_defaults; }
+                else { saved = Some(previous); }
+            }
+        }
+        saved
     }
 }
 impl Default for Project {
@@ -645,6 +662,7 @@ impl Default for Project {
             input_urls: String::new(),
             production: None,
             composition: None,
+            layer_defaults: Default::default(),
             evidence_settings: Default::default(),
             export_metadata: Default::default(),
         }

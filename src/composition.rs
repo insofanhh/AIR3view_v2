@@ -185,6 +185,7 @@ impl Composition {
             }
             start+=s.duration_ms;
         }
+        p.layer_defaults.apply(p, &mut result);
         result
     }
     pub fn validate(&self)->Result<()> {

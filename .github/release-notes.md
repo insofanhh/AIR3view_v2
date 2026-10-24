@@ -1,4 +1,13 @@
-## AIR3view 0.2.2: Whisper CUDA và large-v3-turbo
+## AIR3view 0.2.3: cập nhật bằng một nút và nhớ cấu hình layer
+
+- Khi có Release mới, bấm **Cập nhật**: app tự tải ZIP chính thức, kiểm SHA256 và manifest, bổ sung file thiếu/thay file thay đổi trong thư mục hiện tại rồi mở lại.
+- Tự lưu trước khi đóng, chờ tác vụ đang chạy hoàn tất. Giữ dự án, cài đặt, cookie, model và môi trường Python; bổ sung thư viện khi bộ khóa thay đổi.
+- Lỗi tải/kiểm tra giữ bản đang dùng. Lỗi cài đặt khôi phục file cũ và mở lại bản cũ; hiển thị kết quả trong cửa sổ cập nhật. Có kiểm thử EXE thật, file khóa, ZIP lỗi, đường dẫn Unicode và khôi phục một phần trong CI.
+- Nhớ thông số layer cho dự án tiếp theo, tách bố cục cảnh Host/review và từng ảnh dẫn chứng.
+
+**Lưu ý chuyển phiên bản:** người đang dùng 0.2.2 trở xuống cần tải/giải nén bản có updater này một lần. Sau đó dùng nút **Cập nhật**, không cần tải ZIP thủ công nữa.
+
+### Whisper CUDA và large-v3-turbo
 
 - Chọn model **large-v3-turbo** cùng **CPU** hoặc **CUDA / NVIDIA** ở phần Whisper chung cho Gemini/Antigravity và căn phụ đề.
 - Thêm **Kiểm tra CUDA / Chuẩn bị CUDA**, tải thư viện NVIDIA chính thức có kiểm SHA256 vào thư mục dữ liệu riêng. Không cần cài CUDA Toolkit hoặc chép DLL thủ công.
@@ -18,7 +27,7 @@ Gói kèm FFmpeg/ffprobe, yt-dlp, Node.js, uv, Rhubarb và giấy phép. Không 
 
 ## Thông báo cập nhật
 
-App kiểm tra GitHub ở luồng nền khi mở và mỗi 15 phút, có nút kiểm tra thủ công ở **Cập nhật** cuối menu trái. Có code mới sẽ hiện thông báo; khi build/release hoàn thành sẽ có nút tải ZIP. Giải nén bản mới vào thư mục mới rồi mở EXE mới một lần để cập nhật shortcut. Dự án/cấu hình trong `%LOCALAPPDATA%\ReactionStudio` được giữ lại. Runtime Python/model có thể tải lại tùy bản và cache trên máy.
+App kiểm tra GitHub ở luồng nền khi mở và mỗi 15 phút, có nút kiểm tra thủ công ở **Cập nhật** cuối menu trái. Có code mới sẽ hiện thông báo; khi build/release hoàn thành sẽ có nút **Cập nhật** để tự tải, kiểm tra, cài và mở lại ngay trong thư mục hiện tại. Dự án/cấu hình trong `%LOCALAPPDATA%\ReactionStudio` được giữ lại. Thư mục app cần có quyền ghi và đủ chỗ cho gói tải cùng bản sao khôi phục.
 
 Mỗi lần push `main`, GitHub Actions chạy test, build, kiểm tra xuất video rồi mới công bố bản tải mới. Chỉ tải asset từ repo chính thức; đối chiếu SHA256 với `SHA256SUMS.txt` khi cần.
 
