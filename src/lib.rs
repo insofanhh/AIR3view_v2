@@ -9,6 +9,7 @@ pub mod content_language;
 pub mod diagnostics;
 pub mod date_filter;
 pub mod download_location;
+pub mod footage_speed;
 pub mod evidence;
 pub mod evidence_sfx;
 pub mod export_location;

@@ -33,6 +33,42 @@ fn section(
     ui.ctx().data_mut(|data| data.insert_temp(egui::Id::new(("setup_card", id)), _card.response.rect));
 }
 impl StudioApp {
+    pub(super) fn footage_speed_settings(&mut self,ui:&mut egui::Ui) {
+        let old=self.project.output.footage_speed.clone();
+        let _speed_header=egui::CollapsingHeader::new("Tốc độ footage gốc / hook").id_salt("footage_speed_settings").default_open(std::env::args().any(|a|a=="--speed-settings")).show(ui,|ui| {
+        let cfg=&mut self.project.output.footage_speed;
+        ui.horizontal_wrapped(|ui|{
+            for (value,text) in [("off","Tắt"),("auto","Tự động khớp voice"),("fixed","Cố định")] {
+                let r=ui.selectable_value(&mut cfg.mode,value.into(),text);
+                #[cfg(test)] self.hitboxes.insert(format!("speed_mode_{value}"),r.rect);
+                #[cfg(not(test))] let _=r;
+            }
+        });
+        ui.add_enabled_ui(cfg.mode!="off",|ui|{
+            ui.spacing_mut().slider_width=(ui.available_width()-155.).clamp(45.,130.);
+            egui::Grid::new("footage_speed_fields").num_columns(2).spacing([8.,8.]).show(ui,|ui| {
+            for (id,label,value) in [("speed_preferred","Ưu tiên",&mut cfg.preferred),("speed_maximum","Tối đa",&mut cfg.maximum),("speed_hook","Hook",&mut cfg.hook),("speed_intercut","Đoạn xen kẽ",&mut cfg.intercut)] {
+                ui.label(label);
+                let r=ui.add(egui::Slider::new(value,1. ..=2.).step_by(0.05).suffix("×"));
+                #[cfg(test)] self.hitboxes.insert(id.into(),r.rect);
+                #[cfg(not(test))] let _=(id,r);
+                ui.end_row();
+            }
+            });
+            cfg.maximum=cfg.maximum.max(cfg.preferred);
+            ui.add(egui::Checkbox::new(&mut cfg.allow_host,"Thiếu footage: cho phép chuyển Host"));
+        });
+        muted(ui,"Voice AI, nhép miệng và sub giữ 1×. Tiếng gốc/nền mờ theo tốc độ hình. Hook giữ ít nhất 3 giây.");
+        });
+        #[cfg(test)] self.hitboxes.insert("speed_header".into(),_speed_header.header_response.rect);
+        if old!=self.project.output.footage_speed {
+            let mut candidate=self.project.clone();
+            match crate::footage_speed::fit(&mut candidate) {
+                Ok(_)=>{self.project=candidate;self.touch();self.request_frame();},
+                Err(e)=>{self.project.output.footage_speed=old;self.message(format!("Chưa đổi tốc độ: {e:#}"),true);}
+            }
+        }
+    }
     pub(super) fn original_audio_settings(&mut self,ui:&mut egui::Ui) {
         heading(ui,"ÂM THANH VIDEO GỐC");
         let o=&mut self.project.output;

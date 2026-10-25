@@ -279,7 +279,7 @@ pub fn segment_key(p: &Project, s: &Segment, settings: &Settings) -> String {
         .map(|s| media_identity(&s.path))
         .unwrap_or_default();
     hash(format!(
-        "render-v8-timeline:{}:{}:{}:{}:{}:{}:{}:{}",
+        "render-v9-footage-speed:{}:{}:{}:{}:{}:{}:{}:{}",
         serde_json::to_string(s).unwrap_or_default(),
         serde_json::to_string(&p.output).unwrap_or_default(),
         serde_json::to_string(&p.subtitles).unwrap_or_default(),
@@ -309,6 +309,11 @@ pub fn render_segment(
     fs::create_dir_all(&work)?;
     let output = work.join("segment.mp4");
     if output.is_file() && probe(settings, &output, cancel).is_ok() {
+        return Ok(output);
+    }
+    if (s.source_rate-1.).abs()>0.00001 || !s.footage_spans.is_empty() {
+        let mut scene=p.clone();scene.segments=vec![s.clone()];scene.composition=None;scene.ensure_composition();
+        crate::layer_media::export(&scene,settings,&output,cancel)?;
         return Ok(output);
     }
     let (w, h) = p.output.dimensions();
@@ -534,7 +539,7 @@ pub fn render<F: FnMut(usize, usize)>(
 ) -> Result<()> {
     p.validate(true)?;
     p.check_duration()?;
-    if p.composition.is_some() {
+    if p.composition.is_some() || p.segments.iter().any(|v|v.source_rate!=1.||!v.footage_spans.is_empty()) {
         crate::layer_media::export_with_progress(p,settings,output,cancel,progress)?;
         return Ok(());
     }

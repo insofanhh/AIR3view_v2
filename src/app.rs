@@ -1141,6 +1141,8 @@ impl StudioApp {
         }
     }
     fn output_settings(&mut self, ui: &mut egui::Ui) {
+        self.footage_speed_settings(ui);
+        ui.separator();
         self.original_audio_settings(ui);
         ui.separator();
         let old_output=self.project.output.clone();
@@ -2305,6 +2307,33 @@ impl eframe::App for StudioApp {
 mod ui_tests {
     use super::*;
     #[test]
+    fn footage_speed_controls_fit_native_columns_and_keep_voice_when_enabled() {
+        for width in [280.,360.,600.] {
+            let ctx=egui::Context::default();let mut app=StudioApp::from_context(&ctx);
+            app.project.output.footage_speed.hook=2.;
+            app.project.sources=vec![Source{id:"src".into(),duration_ms:30000,..Default::default()}];
+            app.project.segments=vec![Segment{source_id:"src".into(),out_ms:6000,duration_ms:6000,..Default::default()},
+                Segment{kind:"review".into(),source_id:"src".into(),in_ms:6000,out_ms:20000,duration_ms:8000,narration:"Lời AI giữ nguyên".into(),audio:Some("voice.wav".into()),avatar:Some("host.mkv".into()),..Default::default()}];
+            let draw=|app:&mut StudioApp,events| {let _=ctx.run(egui::RawInput{screen_rect:Some(Rect::from_min_size(Pos2::ZERO,Vec2::new(width,800.))),events,..Default::default()},|ctx| {
+                egui::CentralPanel::default().show(ctx,|ui| {
+                    app.footage_speed_settings(ui);
+                });
+            });};
+            ctx.style_mut(|s|s.animation_time=0.);
+            for _ in 0..3 {draw(&mut app,vec![]);}
+            let header=app.hitboxes["speed_header"].center();
+            for pressed in [true,false] {draw(&mut app,vec![egui::Event::PointerMoved(header),egui::Event::PointerButton{pos:header,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);}
+            for _ in 0..3 {draw(&mut app,vec![]);}
+            let pos=app.hitboxes["speed_mode_auto"].center();
+            for pressed in [true,false] {draw(&mut app,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);}
+            draw(&mut app,vec![]);
+            assert_eq!(app.project.output.footage_speed.mode,"auto");
+            assert_eq!(app.project.segments[0].duration_ms,3000);
+            let review=&app.project.segments[1];assert_eq!(review.duration_ms,8000);assert_eq!(review.audio,Some("voice.wav".into()));assert_eq!(review.avatar,Some("host.mkv".into()));
+            for key in ["speed_preferred","speed_maximum","speed_hook","speed_intercut"] {let r=app.hitboxes[key];assert!(r.left()>=0.&&r.right()<=width&&r.bottom()<700.,"{width}: {key} {r:?}");}
+        }
+    }
+    #[test]
     fn asr_controls_fit_and_are_available_for_both_providers() {
         for provider in ["antigravity", "gemini"] {
             for width in [760.,1080.,1440.] {
@@ -3117,8 +3146,13 @@ mod ui_tests {
         assert_eq!(app.project.segments.len(), 1);
         click(&mut app, &ctx, "lock");
         assert!(!app.project.segments[0].locked);
+        // Additional optional properties make the inspector scrollable. Return
+        // to its toolbar before clicking, just as a user does in the native UI.
+        frame(&mut app,&ctx,vec![egui::Event::PointerMoved(Pos2::new(700.,400.)),egui::Event::MouseWheel{
+            unit:egui::MouseWheelUnit::Point,delta:Vec2::new(0.,1200.),modifiers:egui::Modifiers::NONE}]);
+        for _ in 0..5 {frame(&mut app,&ctx,vec![]);}
         click(&mut app, &ctx, "action_3");
-        assert_eq!(app.project.segments.len(), 2);
+        assert_eq!(app.project.segments.len(), 2,"notice={} action={:?} cursor={}",app.notice,app.hitboxes.get("action_3"),app.timeline_view.cursor);
         assert_eq!(app.project.duration_ms(), 6000);
         assert_ne!(app.project.segments[0].id, app.project.segments[1].id);
         click(&mut app, &ctx, "tl_delete");

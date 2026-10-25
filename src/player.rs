@@ -119,6 +119,10 @@ impl Player {
 }
 
 struct LayerDecoder { child:Child, stream:ChildStdout, width:u32,height:u32,last:Option<image::RgbaImage> }
+#[cfg(test)]
+pub(crate) fn decode_test_frame(p:&crate::model::Project,s:&Settings,c:&crate::composition::LayerClip,local:u64)->anyhow::Result<image::RgbaImage> {
+    LayerDecoder::new(p,s,c,local)?.read().ok_or_else(||anyhow::anyhow!("Preview decode returned no frame"))
+}
 impl Drop for LayerDecoder {fn drop(&mut self){let _=self.child.kill();let _=self.child.wait();}}
 impl LayerDecoder {
     fn new(p:&crate::model::Project,s:&Settings,c:&crate::composition::LayerClip,local:u64)->anyhow::Result<Self> {
@@ -133,7 +137,7 @@ impl LayerDecoder {
             let f=(w as f64/info.width.max(1) as f64).min(h as f64/info.height.max(1) as f64);
             let dw=(info.width as f64*f).round() as u32;let dh=(info.height as f64*f).round() as u32;
             // Explicit dimensions avoid ffmpeg rounding differing from allocation.
-            filter=format!("setpts=PTS-STARTPTS,scale={dw}:{dh},setsar=1,fps=24,format=rgba");(dw,dh)
+            filter=format!("{},scale={dw}:{dh},setsar=1,fps=24,format=rgba",c.pts());(dw,dh)
         }else{(w,h)};
         let mut args=vec!["-v".into(),"error".into(),"-threads".into(),"1".into(),"-filter_threads".into(),"1".into()];args.extend(input);
         args.extend(["-an".into(),"-vf".into(),filter,"-t".into(),format!("{:.6}",c.duration_ms.saturating_sub(local) as f64/1000.),"-pix_fmt".into(),"rgba".into(),"-f".into(),"rawvideo".into(),"pipe:1".into()]);
@@ -188,13 +192,13 @@ fn composition_worker(p:&crate::model::Project,s:&Settings,ms:u64,play:bool,canc
                 if sinks.contains_key(&c.id){continue;}
                 let Some(path)=c.media.as_ref().filter(|p|p.is_file()) else{continue;};
                 let audio_time=clock.map(|clock|ms+clock.elapsed().as_millis() as u64).unwrap_or(ms);
-                let offset=audio_time.saturating_sub(c.start_ms).min(c.duration_ms);let input_ms=c.media_in_ms+offset;
+                let offset=audio_time.saturating_sub(c.start_ms).min(c.duration_ms);let input_ms=c.source_at(offset);
                 let remaining=Duration::from_millis(c.duration_ms-offset);
-                let source:Box<dyn AudioSource<Item=i16>+Send>=if path.extension().is_some_and(|e|e.eq_ignore_ascii_case("wav")) {
+                let source:Box<dyn AudioSource<Item=i16>+Send>=if (c.playback_rate-1.).abs()<0.000001&&path.extension().is_some_and(|e|e.eq_ignore_ascii_case("wav")) {
                     let decoder=rodio::Decoder::new(BufReader::new(std::fs::File::open(path)?))?;
                     Box::new(decoder.skip_duration(Duration::from_millis(input_ms)).take_duration(remaining))
                 }else{
-                    let mut child=process::command(&s.ffmpeg).args(["-v","error","-threads","1","-ss",&format!("{:.6}",input_ms as f64/1000.),"-i",&path.to_string_lossy(),"-t",&format!("{:.6}",remaining.as_secs_f64()),"-vn","-f","s16le","-ac","2","-ar","48000","pipe:1"]).stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null()).spawn()?;
+                    let mut child=process::command(&s.ffmpeg).args(["-v","error","-threads","1","-ss",&format!("{:.6}",input_ms as f64/1000.),"-i",&path.to_string_lossy(),"-t",&format!("{:.6}",remaining.as_secs_f64()),"-af",&c.tempo(),"-vn","-f","s16le","-ac","2","-ar","48000","pipe:1"]).stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null()).spawn()?;
                     let stdout=child.stdout.take().ok_or_else(||anyhow::anyhow!("Audio pipe"))?;
                     Box::new(PcmSource{reader:BufReader::new(stdout),child,cancel:cancel.clone()})
                 };

@@ -117,16 +117,19 @@ fn slice_segment(s: &Segment, from: u64, to: u64) -> Segment {
         part.timing_manual=true;Some(part)
     }).collect();
     if s.kind != "host" {
-        // Rendering consumes source at 1x. Extra source handles remain available
-        // in the last slice, including the existing final-frame hold allowance.
-        part.in_ms = (s.in_ms + from).min(s.out_ms.saturating_sub(1));
+        part.footage_spans=crate::footage_speed::slice(s,from,to);
+        part.footage_anchors=s.footage_anchors.iter().filter(|a|a.timeline_ms>=from&&a.timeline_ms<to).cloned().map(|mut a|{a.timeline_ms-=from;a}).collect();
+        let source_at=|t|s.footage_spans.iter().find(|v|t>=v.start_ms&&t<=v.start_ms+v.duration_ms)
+            .map(|v|v.source_in_ms+crate::footage_speed::scaled(t-v.start_ms,v.rate()))
+            .unwrap_or(s.in_ms+crate::footage_speed::scaled(t,s.source_rate));
+        part.in_ms = source_at(from).min(s.out_ms.saturating_sub(1));
         part.out_ms = if to == s.duration_ms {
             s.out_ms
         } else {
-            (s.in_ms + to).min(s.out_ms)
+            source_at(to).min(s.out_ms)
         };
         if part.kind == "source" {
-            part.out_ms = part.in_ms + part.duration_ms;
+            part.out_ms = part.in_ms + crate::footage_speed::scaled(part.duration_ms,s.source_rate);
         }
     }
     part.asset_start_ms = s.asset_start_ms + from;

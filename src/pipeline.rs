@@ -206,6 +206,7 @@ pub fn prepare(mut p: Project, s: Settings, tx: Sender<Event>, cancel: Cancel) -
     }
     p.status = "Cần kiểm tra".into();
     p.save()?;
+    speed_report(&p)?;
     let _ = tx.send(Event::Project(Box::new(p.clone())));
     let _ = download?;
     let _ = analysis?;
@@ -235,8 +236,21 @@ pub fn voice_key_for_language(s: &Settings, seg: &Segment, language: &str) -> St
         crate::content_language::canonical(language), voice_key(s, seg))) }
 }
 
+fn speed_report(p:&Project)->Result<()> {
+    if crate::footage_speed::enabled(p) {
+        write_json(&p.root.join("analysis/footage-speed-report.json"),&serde_json::json!({
+            "settings":p.output.footage_speed,"scenes":p.segments.iter().map(|s|serde_json::json!({
+                "scene_id":s.id,"kind":s.kind,"duration_ms":s.duration_ms,"source_rate":s.source_rate,
+                "status":s.footage_status,"spans":s.footage_spans,"anchors":s.footage_anchors
+            })).collect::<Vec<_>>()
+        }))?;
+    }
+    Ok(())
+}
+
 fn checkpoint(p: &Project, tx: &Sender<Event>) -> Result<()> {
     p.save()?;
+    speed_report(p)?;
     let _ = tx.send(Event::Project(Box::new(p.clone())));
     Ok(())
 }
@@ -331,6 +345,7 @@ pub fn generate_speech(
                     .min(info.duration_ms);
             }
             seg.duration_ms = info.duration_ms;
+            seg.footage_spans.clear();
             seg.audio = Some(audio);
             if seg.words.is_empty() {
                 let text = if seg.caption.trim().is_empty() {
@@ -482,11 +497,18 @@ fn generate_assets_core(
             }
         }
     }
+    if crate::footage_speed::enabled(&p)&&p.segments.iter().any(|v|v.kind=="review"&&!v.footage_anchors.is_empty()&&v.timing_estimated) {
+        stage(&tx,"Tốc độ footage","Căn từ trên WAV thật trước khi khớp mốc hành động",false);
+        p=transcribe(p,s.clone(),worker_path("transcribe.py"),tx.clone(),cancel.clone())?;
+    }
     // Validate measured voice and footage before entering either avatar provider.
     let mut fitted = p.clone();
     fitted.composition=None;
     let mut footage_changes = Vec::new();
     let validation = (|| -> Result<()> {
+        if crate::footage_speed::enabled(&fitted) {
+            for message in crate::footage_speed::fit(&mut fitted)? {stage(&tx,"Tốc độ footage",&message,false);}
+        }
         fit_budget(&mut fitted)?;
         footage_changes = fit_review_footage(&mut fitted)?;
         fitted.validate(true)?;
@@ -743,14 +765,14 @@ pub fn transcribe(
         } else if seg.audio.is_some() { seg.asset_language.clone() } else { p.rules.language.clone() };
         let meta = fs::metadata(&input)?;
         let key = media::hash(format!(
-            "asr-v2:{}:{}:{:?}:{}:{}:{}:{}",
+            "asr-v4:{}:{}:{:?}:{}:{}:{}:{}:{}",
             input.display(),
             meta.len(),
             meta.modified().ok(),
             start,
             seg.duration_ms,
             language,
-            s.asr_model
+            s.asr_model,seg.source_rate
         ));
         let output = folder.join(format!("{key}.words.json"));
         outputs.push(output.clone());
@@ -768,6 +790,7 @@ pub fn transcribe(
             "-t".into(),
             format!("{:.3}", seg.duration_ms as f64 / 1000.0),
             "-vn".into(),
+            "-af".into(),if seg.kind=="source"&&(seg.source_rate-1.).abs()>0.000001 {format!("atempo={}",seg.source_rate)}else{"anull".into()},
             "-ar".into(),
             "16000".into(),
             "-ac".into(),
@@ -832,6 +855,7 @@ pub fn transcribe(
                 .join(" ");
         }
         let seg=&mut p.segments[i];
+        crate::footage_speed::align_measured(seg,&words);
         let text=if !seg.caption.trim().is_empty() { &seg.caption } else { &seg.narration };
         if !text.trim().is_empty() {
             let (aligned,estimated)=subtitle::align_text(text,&words,seg.duration_ms);
@@ -841,6 +865,7 @@ pub fn transcribe(
         }
         p.save()?;
     }
+    if crate::footage_speed::enabled(&p) {for message in crate::footage_speed::fit(&mut p)? {stage(&tx,"Tốc độ footage",&message,false);}}
     crate::evidence::align(&mut p);p.ensure_composition();checkpoint(&p,&tx)?;
     stage(&tx, "Subtitle", "Đã căn từ bằng Whisper", true);
     Ok(p)

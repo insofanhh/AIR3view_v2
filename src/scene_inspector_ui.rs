@@ -165,7 +165,7 @@ fn source_card(ui: &mut egui::Ui, s: &mut Segment, sources: &[Source], geo: &mut
             s.in_ms = (start * 1000.).round() as u64;
             s.out_ms = (end * 1000.).round() as u64;
             if s.kind == "source" {
-                s.duration_ms = s.out_ms.saturating_sub(s.in_ms);
+                s.duration_ms = (s.out_ms.saturating_sub(s.in_ms) as f64/s.source_rate).round() as u64;
             }
             label(
                 ui,
@@ -385,6 +385,40 @@ fn scene_details(ui: &mut egui::Ui, s: &mut Segment, geo: &mut SceneGeometry, la
 }
 
 impl StudioApp {
+    fn scene_footage_speed(&mut self,ui:&mut egui::Ui) {
+        if self.project.segments[self.selected].kind=="host" {return;}
+        let before=self.project.clone();let s=&mut self.project.segments[self.selected];
+        let locked=s.locked||self.project.timeline.tracks.iter().enumerate().any(|(i,t)|t.locked&&crate::timeline::has_track(s,i));
+        ui.add_enabled_ui(!locked,|ui|{
+            egui::CollapsingHeader::new("Tốc độ hình & mốc khớp lời").id_salt("scene_speed").show(ui,|ui|{
+                let mut own=s.footage_rate_override.is_some();
+                if ui.checkbox(&mut own,"Tốc độ riêng cho cảnh").changed(){s.footage_rate_override=own.then_some(1.25);}
+                if let Some(rate)=&mut s.footage_rate_override {ui.add(egui::Slider::new(rate,1. ..=2.).step_by(0.05).suffix("×"));}
+                ui.add(egui::Label::new(&s.footage_status).wrap());
+                label(ui,"Đổi hình giữ nguyên voice/sub. Mốc tự động được căn sau khi tạo giọng và Căn từ.");
+                let mut remove=None;
+                for (index,a) in s.footage_anchors.iter_mut().enumerate() {
+                    ui.push_id(index,|ui|{
+                        field(ui,"Cụm từ trong lời review",&mut a.phrase);
+                        ui.horizontal_wrapped(|ui|{
+                            ui.label("Nguồn");ui.add(egui::DragValue::new(&mut a.source_ms).range(s.in_ms..=s.out_ms).suffix(" ms"));
+                            ui.checkbox(&mut a.manual,"Mốc tay");
+                            if a.manual {ui.label("Trong cảnh");ui.add(egui::DragValue::new(&mut a.timeline_ms).range(0..=s.duration_ms).suffix(" ms"));}
+                            ui.label(crate::footage_speed::anchor_status(&a.status));if ui.button("Xóa mốc").clicked(){remove=Some(index);}
+                        });
+                    });
+                }
+                if let Some(i)=remove{s.footage_anchors.remove(i);}
+                if s.kind=="review"&&s.footage_anchors.len()<8&&ui.button("+ Mốc hành động").clicked(){s.footage_anchors.push(crate::footage_speed::Anchor{source_ms:s.in_ms,..Default::default()});}
+            });
+        });
+        if serde_json::to_vec(&before.segments[self.selected]).ok()!=serde_json::to_vec(&self.project.segments[self.selected]).ok() {
+            match crate::footage_speed::fit(&mut self.project) {
+                Ok(_)=>{self.touch();self.request_frame();},
+                Err(e)=>{self.project=before;self.message(format!("Chưa đổi tốc độ: {e:#}"),true);}
+            }
+        }
+    }
     pub(super) fn segment_inspector(&mut self, ui: &mut egui::Ui) {
         if self.selected >= self.project.segments.len() {
             heading(ui, "THUỘC TÍNH CẢNH");
@@ -462,14 +496,19 @@ impl StudioApp {
             s.avatar = None;
             s.avatar_key.clear();
         }
-        if s.caption != old.caption || s.in_ms != old.in_ms || s.out_ms != old.out_ms {
+        if s.caption != old.caption || s.kind=="source"&&(s.in_ms != old.in_ms || s.out_ms != old.out_ms) {
             s.suppress_captions = false;
             s.words.clear();
             s.timing_estimated = true;
         }
         if changed {
+            if s.in_ms!=old.in_ms||s.out_ms!=old.out_ms||s.narration!=old.narration {s.footage_spans.clear();}
+            if crate::footage_speed::enabled(&self.project) {
+                if let Err(e)=crate::footage_speed::fit(&mut self.project) {self.project.segments[self.selected]=old.clone();self.message(format!("Chưa đổi cảnh: {e:#}"),true);}
+            }
             self.touch();
         }
+        self.scene_footage_speed(ui);
         if action > 0 && !old.locked {
             if action == 3 {
                 let start = crate::timeline::starts(&self.project)

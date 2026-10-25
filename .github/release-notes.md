@@ -1,4 +1,14 @@
-## AIR3view 0.2.6: thư mục video nguồn, bộ lọc ngày và nhân vật 2D
+## AIR3view 0.2.7: tốc độ footage gốc và hook độc lập với giọng AI
+
+- Thêm **Tốc độ footage gốc / hook** tại **Thiết lập dự án → Hình ảnh đầu ra** và bảng **Khung**: tắt, tự động hoặc tốc độ cố định; điều chỉnh riêng hook và các đoạn gốc xen kẽ. Nhớ thiết lập cho dự án mới và xử lý hàng loạt.
+- Giữ tốc độ giọng AI, nhân vật, phụ đề, dẫn chứng và SFX; tiếng gốc đi theo tốc độ footage. Preview và MP4 dùng cùng phép ánh xạ thời gian nguồn.
+- Điều chỉnh từng cảnh tại **Tốc độ hình & mốc khớp lời**; hỗ trợ các mốc hành động/cụm từ và báo cáo `analysis/footage-speed-report.json`. Kiểm tra giới hạn đoạn nguồn, vùng bắt buộc giữ/loại và thời lượng tối thiểu; báo xung đột khi không đủ footage.
+- Sửa đường âm thanh 1× để không đi qua bộ đổi tốc độ; nâng phiên bản cache nhận dạng/xuất để tạo lại dữ liệu cần thiết.
+- Đã kiểm thử hai URL YouTube thực tế từ tải, phân tích, tạo giọng/nhân vật tới MP4 dọc và ngang ở 360p; hook 1,25×, giọng AI giữ nguyên tốc độ và không lệch thời gian trong đoạn đo. Đạt 136 kiểm thử Rust, 1 bỏ qua; Clippy không cảnh báo trước khi chuẩn bị phát hành. CI tiếp tục kiểm tra bộ cài, cập nhật/khôi phục, render, TTS, avatar và Whisper trước khi công bố.
+
+**Cập nhật:** bấm **Cập nhật** trong app để tự tải, cài và mở lại. Dự án và cấu hình được giữ lại. Nếu dự án báo mất audio tham chiếu, chọn lại audio tại **Thiết lập dự án → Giọng, nhân vật & âm thanh**; bản này chưa sửa cơ chế kế thừa đường dẫn audio cũ.
+
+### Tính năng từ 0.2.6: thư mục video nguồn, bộ lọc ngày và nhân vật 2D
 
 - Thêm chọn **Thư mục video nguồn YouTube** trong **Nơi lưu / metadata**; ghi nhớ cho các dự án mới và video tiếp theo trong hàng đợi. Mỗi dự án có thư mục nguồn riêng để tránh ghi đè. Có nút trở về nơi lưu mặc định của dự án.
 - Giữ nguyên đường dẫn video đã tải; thay nơi lưu không yêu cầu phân tích, tạo giọng hoặc avatar lại. Báo rõ khi ổ lưu không khả dụng. Thư mục xuất MP4 được chọn độc lập.

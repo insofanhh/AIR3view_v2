@@ -220,6 +220,7 @@ pub fn worker_path(name: &str) -> PathBuf {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct OutputSettings {
+    pub footage_speed: crate::footage_speed::Settings,
     pub editorial: bool,
     pub blur_background: bool,
     /// Original footage audio under narrated review scenes; source intercuts are independent.
@@ -239,6 +240,7 @@ pub struct OutputSettings {
 impl Default for OutputSettings {
     fn default() -> Self {
         Self {
+            footage_speed: Default::default(),
             editorial: false,
             blur_background: false,
             original_audio_enabled: false,
@@ -452,6 +454,11 @@ pub struct Segment {
     pub in_ms: u64,
     pub out_ms: u64,
     pub duration_ms: u64,
+    pub source_rate: f64,
+    pub footage_rate_override: Option<f64>,
+    pub footage_spans: Vec<crate::footage_speed::Span>,
+    pub footage_anchors: Vec<crate::footage_speed::Anchor>,
+    pub footage_status: String,
     pub narration: String,
     pub caption: String,
     pub emotion: String,
@@ -487,6 +494,11 @@ impl Default for Segment {
             in_ms: 0,
             out_ms: 5000,
             duration_ms: 5000,
+            source_rate: 1.,
+            footage_rate_override: None,
+            footage_spans: vec![],
+            footage_anchors: vec![],
+            footage_status: String::new(),
             narration: String::new(),
             caption: String::new(),
             emotion: "Tự nhiên".into(),
@@ -515,6 +527,8 @@ impl Default for Segment {
 }
 impl Segment {
     pub fn invalidate_voice(&mut self) {
+        self.footage_spans.clear();
+        self.footage_status.clear();
         self.asset_start_ms = 0;
         self.avatar_start_ms = 0;
         self.asset_window = false;
@@ -756,6 +770,7 @@ impl Project {
         Ok(p)
     }
     pub fn validate_configuration(&self) -> Result<()> {
+        self.output.footage_speed.validate()?;
         self.card_sound.validate()?;
         crate::evidence::validate(self)?;
         ensure!((1..=8).contains(&self.rules.intercut_count)
@@ -840,6 +855,7 @@ impl Project {
         Ok(())
     }
     pub fn validate(&self, require_files: bool) -> Result<()> {
+        for seg in &self.segments {crate::footage_speed::validate_scene(seg)?;}
         self.validate_configuration()?;
         ensure!(!self.segments.is_empty(), "Timeline chưa có cảnh");
         let mut ids = std::collections::HashSet::new();
@@ -923,7 +939,7 @@ impl Project {
                 }
                 if s.kind == "source" {
                     ensure!(
-                        s.duration_ms == s.out_ms - s.in_ms,
+                        crate::footage_speed::scaled(s.duration_ms,s.source_rate).abs_diff(s.out_ms-s.in_ms)<=2,
                         "Thời lượng cảnh gốc phải khớp điểm cắt"
                     );
                 }
@@ -942,7 +958,7 @@ impl Project {
                 .segments
                 .iter()
                 .filter(|s| s.kind != "host" && s.source_id == r.source_id)
-                .map(|s| (s.in_ms, s.out_ms.min(s.in_ms.saturating_add(s.duration_ms))))
+                .flat_map(|s| if !s.footage_spans.is_empty() {s.footage_spans.iter().map(|v|(v.source_in_ms,v.source_out_ms)).collect::<Vec<_>>()}else{vec![(s.in_ms,s.out_ms.min(s.in_ms.saturating_add(crate::footage_speed::scaled(s.duration_ms,s.source_rate))))]})
                 .collect();
             covered.sort_unstable();
             let mut end = r.start_ms;
@@ -1053,6 +1069,7 @@ pub struct FootageAdjustment {
 /// Extend an unlocked review's original interval to cover its measured voice.
 /// Keep all previously selected footage; never cross an excluded range or EOF.
 pub fn fit_review_footage(p: &mut Project) -> Result<Vec<FootageAdjustment>> {
+    if crate::footage_speed::enabled(p) {crate::footage_speed::fit(p)?;return Ok(vec![]);}
     let mut adjustments = Vec::new();
     // Compute every change before committing, so a later impossible scene
     // cannot leave a partially changed timeline.
@@ -1129,9 +1146,9 @@ pub fn fit_budget(p: &mut Project) -> Result<()> {
                 .map(|r| r.end_ms)
                 .max()
                 .unwrap_or(s.in_ms + 1000);
-            let floor = required_end.max(s.in_ms + if p.rules.intercuts_enabled {p.rules.intercut_min_seconds*1000}else{1000});
-            let cut = excess.min(s.out_ms.saturating_sub(floor));
-            s.out_ms -= cut;
+            let floor = required_end.max(s.in_ms + crate::footage_speed::scaled(if p.rules.intercuts_enabled {p.rules.intercut_min_seconds*1000}else{1000},s.source_rate));
+            let cut = excess.min((s.out_ms.saturating_sub(floor) as f64/s.source_rate).floor() as u64);
+            s.out_ms -= crate::footage_speed::scaled(cut,s.source_rate);
             s.duration_ms -= cut;
             excess -= cut;
         }

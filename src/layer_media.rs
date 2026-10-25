@@ -4,12 +4,13 @@ use crate::{composition::*, model::*, process::{self,Cancel}, timeline};
 use anyhow::{Context,Result};
 use std::{fs,path::{Path,PathBuf},time::{Duration,Instant}};
 
-const RENDERER: &str = "composition-v7-evidence-motion";
+const RENDERER: &str = "composition-v8-footage-speed";
 
 fn visual_output(p:&Project)->OutputSettings {
     let mut output=p.output.clone();
     output.original_audio_enabled=false;
     output.original_audio_gain=0.15;
+    output.footage_speed=Default::default();
     output
 }
 
@@ -54,17 +55,18 @@ fn filter_path(path:&Path)->String {
 }
 /// Input is seeked in source time; output PTS starts at zero.
 pub fn visual_input(p:&Project,c:&LayerClip,local:u64,w:u32,h:u32,fps:u32,proxy:bool)->Result<(Vec<String>,String)> {
-    let start=(c.media_in_ms+local) as f64/1000.;
+    let start=c.source_at(local) as f64/1000.;
+    let pts=c.pts();
     if let Some(media)=&c.media {
         let file=if proxy {c.proxy.as_ref().filter(|p|p.is_file()).unwrap_or(media)} else {media};
-        let args=if c.still(){vec!["-loop".into(),"1".into(),"-framerate".into(),fps.to_string(),"-i".into(),file.to_string_lossy().into_owned()]}else{vec!["-ss".into(),format!("{start:.6}"),"-i".into(),file.to_string_lossy().into_owned()]};
+        let args=if c.still(){vec!["-loop".into(),"1".into(),"-framerate".into(),fps.to_string(),"-i".into(),file.to_string_lossy().into_owned()]}else{vec!["-ss".into(),format!("{start:.6}"),"-t".into(),format!("{:.6}",c.source_duration(c.duration_ms.saturating_sub(local)) as f64/1000.),"-i".into(),file.to_string_lossy().into_owned()]};
         let filter=if c.track==BACKGROUND&&!c.still() {
             let bw=(w/4).max(2);let bh=(h/4).max(2);
             let sigma=(12.*w as f32/p.output.dimensions().0 as f32).max(0.1);
-            format!("setpts=PTS-STARTPTS,scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},gblur=sigma={sigma:.5},eq=brightness=-0.12,scale={w}:{h},setsar=1,fps={fps},format=rgba")
+            format!("{pts},scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},gblur=sigma={sigma:.5},eq=brightness=-0.12,scale={w}:{h},setsar=1,fps={fps},format=rgba")
         } else {
             // Preserve aspect ratio; the compositor applies the saved geometry.
-            format!("setpts=PTS-STARTPTS,scale={w}:{h}:force_original_aspect_ratio=decrease,setsar=1,fps={fps},format=rgba")
+            format!("{pts},scale={w}:{h}:force_original_aspect_ratio=decrease,setsar=1,fps={fps},format=rgba")
         };
         Ok((args,filter))
     } else {
@@ -74,7 +76,7 @@ pub fn visual_input(p:&Project,c:&LayerClip,local:u64,w:u32,h:u32,fps:u32,proxy:
         // output size first, then downsample the transparent plane for preview.
         let (cw,ch)=p.output.dimensions();
         let args=vec!["-f".into(),"lavfi".into(),"-i".into(),format!("color=c=black@0.0:s={cw}x{ch}:r={fps},format=rgba")];
-        let filter=format!("setpts=PTS+{cue:.6}/TB,subtitles=filename='{}':alpha=1,setpts=PTS-STARTPTS,scale={w}:{h},format=rgba",filter_path(&file));
+        let filter=format!("setpts=PTS+{cue:.6}/TB,subtitles=filename='{}':alpha=1,{pts},scale={w}:{h},format=rgba",filter_path(&file));
         Ok((args,filter))
     }
 }
@@ -84,7 +86,7 @@ pub fn audio_args(p:&Project,ms:u64,end:u64)->(Vec<String>,String) {
     for c in comp.clips.iter().filter(|c|c.audio()&&c.enabled(p)&&c.end()>ms&&c.start_ms<end) {
         let Some(path)=&c.media else {continue;};if !path.is_file(){continue;}
         let offset=ms.saturating_sub(c.start_ms);let remain=c.duration_ms-offset;
-        args.extend(["-ss".into(),format!("{:.6}",(c.media_in_ms+offset) as f64/1000.),"-t".into(),format!("{:.6}",remain as f64/1000.),"-i".into(),path.to_string_lossy().into_owned()]);
+        args.extend(["-ss".into(),format!("{:.6}",c.source_at(offset) as f64/1000.),"-t".into(),format!("{:.6}",c.source_duration(remain) as f64/1000.),"-i".into(),path.to_string_lossy().into_owned()]);
         // Fade is evaluated in original clip time, including after a seek.
         let fi=c.fade_in_ms.max(1) as f64/1000.;let fo=c.fade_out_ms.max(1) as f64/1000.;let duration=c.duration_ms as f64/1000.;let off=offset as f64/1000.;
         let gain=c.effective_gain(p);
@@ -97,7 +99,7 @@ pub fn audio_args(p:&Project,ms:u64,end:u64)->(Vec<String>,String) {
                 if c.fade_out_ms>0 {format!("min(1,({duration}-t-{off})/{fo})")}else{"1".into()})
         } else {format!(",volume={gain}")};
         let delay=c.start_ms.saturating_sub(ms);
-        filters.push(format!("[{n}:a]asetpts=PTS-STARTPTS,aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo{fade},adelay={delay}:all=1[a{n}]"));n+=1;
+        filters.push(format!("[{n}:a]asetpts=PTS-STARTPTS,{},atrim=duration={:.6},aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo{fade},adelay={delay}:all=1[a{n}]",c.tempo(),remain.min(end-c.start_ms.max(ms)) as f64/1000.));n+=1;
     }
     if n==0 {
         args.extend(["-f".into(),"lavfi".into(),"-i".into(),"anullsrc=r=48000:cl=stereo".into()]);
@@ -160,11 +162,11 @@ fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel
             // end has no visible frame here, and must not invalidate its cache.
             if c.audio() || !c.enabled(p) || (c.start_ms*fps).div_ceil(1000)>=first_frame+frames || (c.end()*fps).div_ceil(1000)<=first_frame {continue;}
             let mut clip=c.clone();let skip=a.saturating_sub(c.start_ms);
-            clip.start_ms=c.start_ms.saturating_sub(a);clip.media_in_ms+=skip;clip.cue_in_ms+=skip;
+            clip.start_ms=c.start_ms.saturating_sub(a);clip.media_in_ms=clip.source_at(skip);clip.cue_in_ms+=skip;
             clip.duration_ms=c.end().min(b)-c.start_ms.max(a);clips.push(clip);
         }
         // A hidden/empty interval still has a duration and must export as blank.
-        if clips.is_empty() {clips.push(LayerClip{id:"blank".into(),scene_id:String::new(),track:BACKGROUND,start_ms:0,duration_ms:b-a,media_in_ms:0,cue_in_ms:0,media:None,proxy:None,transform:Transform::default(),z:0,visible:false,locked:false,linked:false,gain:0.,fade_in_ms:0,fade_out_ms:0,evidence_id:None,group:None,motion:Default::default(),timing_manual:false});}
+        if clips.is_empty() {clips.push(LayerClip{id:"blank".into(),scene_id:String::new(),track:BACKGROUND,start_ms:0,duration_ms:b-a,media_in_ms:0,playback_rate:1.,cue_in_ms:0,media:None,proxy:None,transform:Transform::default(),z:0,visible:false,locked:false,linked:false,gain:0.,fade_in_ms:0,fade_out_ms:0,evidence_id:None,group:None,motion:Default::default(),timing_manual:false});}
         // Hash only script cues consumed by this interval. A different evidence
         // card in the same scene must not invalidate an unrelated interval.
         let scenes:Vec<_>=clips.iter().filter_map(|c|p.segments.iter().find(|s|s.id==c.scene_id).map(|s|{
@@ -256,7 +258,7 @@ fn export_interval(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,end:u64,fr
             };
             // Raster at the saved layer size, rather than enlarging every
             // small card/avatar to the canvas and immediately shrinking it.
-            (input,format!("setpts=PTS-STARTPTS,scale={tw}:{th},setsar=1,fps={fps},format=rgba"))
+            (input,format!("{},scale={tw}:{th},setsar=1,fps={fps},format=rgba",clip.pts()))
         }else{
             // ASS must still be shaped at full output size; blurred video
             // backgrounds retain their original fill/crop/blur semantics.

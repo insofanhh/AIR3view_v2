@@ -267,6 +267,10 @@ pub fn plan_schema() -> Value {
             "motion":{"type":"string","enum":["none","push_in","reaction_shake"]},
             "avatar_size":{"type":"string","enum":["small","large"]},
             "gesture":{"type":"string","enum":["auto","none","open_palms","point","beat","surprised"]},
+            "footage_anchors":{"type":"array","maxItems":3,"items":{"type":"object","properties":{
+                "phrase":{"type":"string","description":"Exact unique phrase copied from this scene narration; starts when the action appears."},
+                "source_ms":{"type":"integer","description":"Verified action timestamp in the original source, inside in_ms/out_ms."}
+            },"required":["phrase","source_ms"]}},
             "evidence_items":{"type":"array","maxItems":4,"items":evidence_schema()},
             "graphics":{"type":"array","items":{"type":"object","properties":{
                 "kind":{"type":"string","enum":["title","fact","number","date"]},
@@ -281,6 +285,9 @@ pub fn build_prompt(p: &Project) -> String {
     let speech_budget = format!("Ước lượng lời {} ở {:.2} đơn vị tách khoảng trắng/giây; ngân sách tổng = (thời lượng đích - hook - các đoạn source) × tốc độ. English ban đầu khoảng 150 words/minute; sau TTS dùng thời lượng WAV thật và hiệu chỉnh theo voice, không dùng tốc độ tiếng Việt cho English.", crate::content_language::label(&p.rules.language), crate::content_language::rate(&p.rules.language));
     let mut rules = p.rules.clone();
     rules.prompt = rules.resolved_prompt();
+    if p.output.footage_speed.mode!="off" {
+        rules.prompt.push_str(&format!("\nTỐC ĐỘ FOOTAGE: Hình review ưu tiên {:.2}×, tối đa {:.2}×; voice AI luôn 1×. Chọn vùng in_ms/out_ms cùng tình huống rộng ít nhất thời lượng thoại ước lượng × tốc độ ưu tiên; không lấn vùng cấm hay kéo cảnh khác vào. Với mỗi review trả footage_anchors gồm 1–3 mốc hành động QUAN SÁT ĐƯỢC: phrase là cụm từ liên tiếp duy nhất trích nguyên văn narration, source_ms là mốc hành động trong video gốc. Phân bổ narration sao cho hình tiến tuần tự, mỗi đoạn giữa các mốc có đủ footage cho lời ở tốc độ 1–{:.2}×. Không bịa timestamp; nếu chỉ phân tích chung, trả []. Tool sẽ căn lại theo WAV/ASR thực tế. Hook được phép tăng {:.2}×, các đoạn gốc xen kẽ {:.2}×; chọn khoảnh khắc dễ theo dõi.",p.output.footage_speed.preferred,p.output.footage_speed.maximum,p.output.footage_speed.maximum,p.output.footage_speed.hook,p.output.footage_speed.intercut));
+    }
     rules.prompt.push_str("\nNHỊP DỰNG MẶC ĐỊNH: Dùng nhịp review xen hiện trường, tôn trọng các thiết lập hook, số đoạn gốc, thời lượng và yêu cầu riêng của người dùng. Sau hook (nếu bật), Host đặt bối cảnh ngắn rồi review dùng footage khớp diễn biến; quay về Host khi phân tích bước ngoặt, hậu quả và kết luận. Mỗi cảnh lời bình tập trung một ý, ưu tiên khoảng 8–14 giây lời nói theo tốc độ ngôn ngữ đã cung cấp; thời lượng cuối lấy từ WAV thật, không thêm khoảng lặng để đủ giây. Rải đều các đoạn source xen kẽ được yêu cầu ở những bước ngoặt trong toàn video, sau câu trọn ý, ưu tiên tiếng hò hét/đối thoại/âm thanh hiện trường có nghĩa. Với video khoảng 100 giây và 3 intercut, tham chiếu đổi về tiếng gốc sau khoảng 20–30 giây lời review; co giãn vị trí theo Độ dài và số intercut, không ép mọi video vào cùng timestamp. Tránh một khối Host hoặc review dài, không bắt buộc luân phiên máy móc từng cảnh, không cắt ngang câu, không lặp hoặc bịa cảnh để đủ nhịp. Cuối video kết thúc cùng hình và lời kết, không thêm cảnh trống hay hiệu ứng âm thanh kết bài riêng.");
     let locked:Vec<_>=p.segments.iter().filter(|v|v.locked).collect();
     if !locked.is_empty() {
@@ -322,6 +329,9 @@ pub fn parse_plan(text: &str) -> Result<ScriptPlan> {
     for seg in &mut plan.segments {
         seg.id = uuid::Uuid::new_v4().to_string();
         seg.invalidate_voice();
+        // Provider output cannot inject execution state or override user speed settings.
+        seg.source_rate=1.;seg.footage_rate_override=None;seg.footage_spans.clear();seg.footage_status.clear();
+        for anchor in &mut seg.footage_anchors {anchor.manual=false;anchor.timeline_ms=0;anchor.status="pending".into();anchor.alignment_key.clear();}
         seg.locked = false;
         for item in &mut seg.evidence_items {
             item.id=uuid::Uuid::new_v4().to_string();item.asset=None;item.annotation_asset=None;item.asset_key.clear();

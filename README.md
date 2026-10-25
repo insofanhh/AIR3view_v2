@@ -1,6 +1,6 @@
 # AIR3view
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.5. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.7. Preview, timeline và các layer nằm ngay trong app.
 
 ## Khởi chạy
 
@@ -33,6 +33,19 @@ App dùng lại VieNeu đang chạy nếu API hỗ trợ giọng tham chiếu v�
 Trong **Nơi lưu / metadata → Thư mục video nguồn YouTube → Đổi thư mục video nguồn…**, chọn ổ/thư mục muốn tải video gốc về. App ghi nhớ ngay cho dự án sau và các video hàng loạt tiếp theo. Mỗi dự án lưu vào `<thư mục đã chọn>/AIR3view-<ID>/sources/`, gồm video gốc và dữ liệu tải đi kèm. **Dùng thư mục dự án** trở về mặc định `<dự án>/sources/`.
 
 Thiết lập này tách biệt với thư mục xuất MP4. Video đã tải và video nhập từ máy giữ nguyên vị trí; đổi nơi lưu không di chuyển chúng, không chạy lại AI/giọng. Proxy, giọng, avatar và cache vẫn nằm trong dự án. Ổ nguồn đã chọn không còn khả dụng sẽ được báo để kết nối lại hoặc chọn nơi khác. Video nguồn ngoài thư mục dự án được giữ lại khi xóa dự án.
+
+## Tăng tốc footage và hook, giữ voice AI 1×
+
+Mở **Thiết lập dự án → Hình ảnh đầu ra → Tốc độ footage gốc / hook** (hoặc bảng **Khung** khi biên tập).
+
+- **Tắt:** mặc định 1×. **Tự động khớp voice:** chọn tốc độ ưu tiên/tối đa từ 1–2×; giảm tốc khi vùng nguồn không đủ. **Cố định:** giữ tốc độ đã chọn; báo lỗi khi thiếu footage hoặc mốc yêu cầu tốc độ khác.
+- **Hook** và **Đoạn xen kẽ** có tốc độ riêng. Hook giữ tối thiểu 3 giây đầu ra, đoạn xen kẽ giữ mức tối thiểu đã đặt; tốc độ thực tế có thể thấp hơn mức chọn để giữ giới hạn này.
+- Voice AI, avatar, phụ đề, thẻ và SFX theo thời gian đầu ra ở 1×. Hình nguồn, nền video mờ và tiếng gốc đi cùng tốc độ footage; tiếng gốc giữ cao độ bằng `atempo`.
+- AI có thể trả mốc hành động kèm cụm từ nguyên văn. App căn cụm từ trên WAV thật rồi ánh xạ mốc nguồn sang thời điểm lời đọc. Mốc tự động xung đột/không tìm thấy được cảnh báo, không được coi là đã khớp; mốc tay không thể khớp sẽ báo lỗi để sửa.
+- Chọn cảnh → **Tốc độ hình & mốc khớp lời** để đặt tốc độ riêng, chỉnh mốc nguồn hoặc mốc tay. Đổi tốc độ không tạo lại voice/avatar. Cảnh/track khóa được giữ nguyên. Thông số chung được nhớ cho dự án mới và sao chép vào phiên hàng loạt.
+- Không lấy thêm hình vượt vùng đã chọn, vùng loại bỏ hay cuối video. Bật **Thiếu footage: cho phép chuyển Host** nếu muốn dùng nhân vật khi vùng nguồn ngắn hơn lời đọc; nếu tắt, app chỉ rõ cảnh cần mở rộng điểm cắt. Kiểm tra preview và cảnh báo trước khi xuất.
+
+Bản đồ tốc độ, trạng thái mốc và thiết lập được lưu trong dự án; báo cáo pipeline tại `analysis/footage-speed-report.json`. Preview, tua, tách/cắt và xuất MP4 dùng cùng bản đồ thời gian.
 
 ## Lọc dự án và phiên hàng loạt theo ngày
 

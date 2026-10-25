@@ -729,14 +729,14 @@ impl StudioApp {
                                             let key = timeline_media::identity(
                                                 &path,
                                                 begin,
-                                                layer.duration_ms,
+                                                layer.source_duration(layer.duration_ms),
                                                 false,
                                             );
                                             self.timeline_view.media.request(Request {
                                                 key: key.clone(),
                                                 path,
                                                 start: begin,
-                                                duration: layer.duration_ms,
+                                                duration: layer.source_duration(layer.duration_ms),
                                                 waveform: false,
                                                 folder: self.project.root.join("cache/timeline"),
                                                 settings: self.settings.clone(),
@@ -801,14 +801,14 @@ impl StudioApp {
                                             let key = timeline_media::identity(
                                                 &path,
                                                 begin,
-                                                layer.duration_ms,
+                                                layer.source_duration(layer.duration_ms),
                                                 true,
                                             );
                                             self.timeline_view.media.request(Request {
                                                 key: key.clone(),
                                                 path,
                                                 start: begin,
-                                                duration: layer.duration_ms,
+                                                duration: layer.source_duration(layer.duration_ms),
                                                 waveform: true,
                                                 folder: self.project.root.join("cache/timeline"),
                                                 settings: self.settings.clone(),
