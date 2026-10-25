@@ -127,6 +127,8 @@ App xử lý lần lượt một dự án để giới hạn RAM/VRAM. **Tạm d
 
 **Bỏ khỏi hàng đợi** chỉ bỏ lượt chạy, giữ dữ liệu dự án. Có thể đổi thứ tự các mục đang chờ và mở dự án đã hoàn thành trong khi đợt tiếp tục. Tác vụ nặng thủ công và cài bản cập nhật bị khóa khi hàng đợi chạy. Đóng app sẽ dừng hàng đợi do phiên đó khởi chạy; mở lại và bấm tiếp tục. Không tự xuất lại các mục đã hoàn thành. Khi thử lại bước xuất, MP4 có biên nhận hợp lệ được kiểm tra rồi dùng lại.
 
+**Xuất sau khi đã có timeline:** mỗi dòng trong **Xử lý hàng loạt** có nút **Xuất** (hoặc **Xuất lại**). Nút **Xuất MP4 cả phiên** ở góc phải xuất lần lượt các dự án hợp lệ trong phiên đang chọn. Trước khi xếp hàng, app kiểm tra `project.json`, timeline và media được dùng; nếu thiếu dữ liệu, hiển thị lý do và cho xác nhận bỏ qua các mục đó. Nếu không có dự án hợp lệ thì không chạy worker. Thao tác dùng timeline/giọng/avatar đã lưu, không chạy lại phân tích hay tạo giọng. Lần đầu chọn thư mục lưu, các lần sau dùng nơi đã nhớ; mỗi dự án lưu tại `AIR3view-<ID>/final.mp4`. Nếu MP4 đích đã tồn tại, app yêu cầu **Xác nhận xuất lại**; **Hủy** giữ nguyên file và hàng đợi. Xuất lại tạo MP4 mới từ timeline hiện tại và giữ bản cũ tại `final.previous-….mp4` sau khi bản mới vượt kiểm tra hình/tiếng/thời lượng. Có thể tạm dừng/tiếp tục và thử lại nếu xuất lỗi. CLI `batch-export <batch-id> <output-folder> [item-id]` yêu cầu thêm `--overwrite` khi đã có MP4 đích.
+
 Dữ liệu đợt nằm trong `%LOCALAPPDATA%\ReactionStudio\batches\<ID>`: `batch.json`, bản chụp thiết lập, nhật ký và kết quả từng lần chạy. Giữ thư mục này cùng dữ liệu dự án để tiếp tục sau khi khởi động lại.
 
 ## Biên tập

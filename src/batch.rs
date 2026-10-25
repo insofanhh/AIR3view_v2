@@ -100,6 +100,17 @@ pub struct Item {
     pub output: Option<PathBuf>,
     pub started_at: Option<u64>,
     pub finished_at: Option<u64>,
+    #[serde(default)]
+    pub export_only: bool,
+    #[serde(default)]
+    pub force_export: bool,
+    #[serde(default)]
+    pub export_existing: Option<ExportFile>,
+}
+impl Item {
+    pub fn can_export(&self) -> bool {
+        self.state.complete() || (self.export_only && (self.state.retryable() || self.state == State::Pending))
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Batch {
@@ -111,6 +122,9 @@ pub struct Batch {
     pub auto_export: bool,
     pub output_folder: Option<PathBuf>,
     pub items: Vec<Item>,
+    /// A manual export runs only these items; unrelated pending URLs stay queued.
+    #[serde(default)]
+    pub run_items: Option<Vec<String>>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct UrlList {
@@ -167,15 +181,24 @@ impl Batch {
             uuid::Uuid::parse_str(&item.project_id)?;
             ensure!(ids.insert(&item.project_id), "Trùng dự án trong hàng đợi");
         }
+        if let Some(scope) = &batch.run_items {
+            ensure!(scope.iter().all(|id| batch.items.iter().any(|i| &i.id == id)), "Phạm vi xuất chứa dự án không có trong phiên");
+        }
         Ok(batch)
     }
     pub fn save(&self, data: &Path) -> Result<()> {
         write_json(&root(data, &self.id)?.join("batch.json"), self)
     }
+    pub fn scheduled(&self, item: &Item) -> bool {
+        self.run_items.as_ref().is_none_or(|ids| ids.contains(&item.id))
+    }
+    pub fn resumable(&self) -> bool {
+        self.items.iter().any(|i| self.scheduled(i) && matches!(i.state, State::Pending | State::Interrupted | State::Cancelled))
+    }
     pub fn reserved(&self, project_id: &str) -> bool {
         matches!(self.status.as_str(), "running" | "pausing")
             && self.items.iter().any(|i| {
-                i.project_id == project_id && matches!(i.state, State::Pending | State::Running)
+                self.scheduled(i) && i.project_id == project_id && matches!(i.state, State::Pending | State::Running)
             })
     }
 }
@@ -236,6 +259,7 @@ pub fn create(
         auto_export,
         output_folder: output,
         items: vec![],
+        run_items: None,
     };
     let mut defaults = ProjectDefaults::from_project(template);
     if defaults.production.is_none() {
@@ -278,6 +302,9 @@ pub fn create(
             output: None,
             started_at: None,
             finished_at: None,
+            export_only: false,
+            force_export: false,
+            export_existing: None,
         });
         projects.push(p);
     }
@@ -452,6 +479,7 @@ fn apply_action(batch: &mut Batch, action: Action) -> bool {
             true
         }
         Action::RetryAll => {
+            batch.run_items = None;
             for i in &mut batch.items {
                 if i.state.retryable() {
                     i.state = State::Pending;
@@ -472,6 +500,9 @@ fn apply_action(batch: &mut Batch, action: Action) -> bool {
                 i.auto_retries = 0;
                 i.retry_at = 0;
                 i.message.clear();
+                if let Some(ids) = &mut batch.run_items {
+                    if !ids.contains(&id) { ids.push(id); }
+                }
             }
             false
         }
@@ -532,6 +563,118 @@ pub fn action(data: &Path, id: &str, action: Action) -> Result<()> {
         }
         Err(_) => send(data, id, action),
     }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportFile {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub modified_ns: u128,
+}
+impl ExportFile {
+    fn read(path: &Path) -> Result<Option<Self>> {
+        let metadata = match fs::metadata(path) {
+            Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e).with_context(|| format!("Không đọc được MP4 đích: {}", path.display())),
+        };
+        ensure!(metadata.is_file(), "Đường dẫn MP4 đích không phải file: {}", path.display());
+        Ok(Some(Self { path: path.to_owned(), bytes: metadata.len(),
+            modified_ns: metadata.modified()?.duration_since(UNIX_EPOCH)?.as_nanos() }))
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportTarget {
+    pub item_id: String,
+    pub title: String,
+    pub output: PathBuf,
+    pub existing: Option<ExportFile>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportPlan {
+    pub batch_id: String,
+    pub item_id: Option<String>,
+    pub folder: PathBuf,
+    pub targets: Vec<ExportTarget>,
+    pub skipped: Vec<String>,
+}
+impl ExportPlan {
+    pub fn existing_count(&self) -> usize { self.targets.iter().filter(|t|t.existing.is_some()).count() }
+}
+/// Read without migrations/backups: inspection must not recreate deleted projects.
+fn export_project(path: &Path, project_id: &str) -> Result<Project> {
+    let bytes = fs::read(path).with_context(|| format!("Không đọc được dữ liệu dự án: {}. Nếu đã xóa, hãy khôi phục thư mục dự án hoặc tạo lại từ URL; MP4 cũ vẫn được giữ.", path.display()))?;
+    let mut p: Project = serde_json::from_slice(&bytes).context("File project.json bị lỗi định dạng")?;
+    ensure!(p.version == 1 && p.id == project_id, "File dự án sai phiên bản hoặc không khớp mã dự án");
+    p.root = std::path::absolute(path)?.parent().context("Thiếu thư mục dự án")?.to_owned();
+    p.rules.migrate_prompt();
+    if let Some(c) = &p.composition { c.validate()?; }
+    p.validate(true)?;
+    p.ensure_composition();
+    p.check_duration()?;
+    crate::layer_media::validate_assets(&p)?;
+    Ok(p)
+}
+/// Build a read-only review of valid projects, missing files and existing outputs.
+pub fn preview_export(data: &Path, id: &str, item_id: Option<&str>, output: &Path) -> Result<ExportPlan> {
+    ensure!(output.is_absolute() && output.is_dir(), "Thư mục xuất MP4 không khả dụng. Chọn lại trong Nơi lưu / metadata.");
+    let b = Batch::load(&root(data, id)?.join("batch.json"))?;
+    ensure!(!matches!(b.status.as_str(), "running" | "pausing"), "Phiên đang chạy; tạm dừng trước khi xuất MP4.");
+    if let Some(id) = item_id {
+        ensure!(b.items.iter().any(|i| i.id == id && i.can_export()), "Dự án chưa sẵn sàng xuất. Hoàn thành xử lý và kiểm tra timeline trước.");
+    }
+    let mut plan = ExportPlan { batch_id: id.into(), item_id: item_id.map(str::to_owned), folder: output.to_owned(), targets: vec![], skipped: vec![] };
+    for item in b.items.iter().filter(|i|item_id.is_none_or(|id| i.id == id)) {
+        let checked = (|| -> Result<ExportTarget> {
+            ensure!(item.can_export(), "Chưa có timeline sẵn sàng xuất");
+            export_project(&project_path(data, item)?, &item.project_id)?;
+            let output = output.join(format!("AIR3view-{}", item.project_id)).join("final.mp4");
+            let existing = ExportFile::read(&output)?;
+            Ok(ExportTarget { item_id: item.id.clone(), title: item.title.clone(), output, existing })
+        })();
+        match checked {
+            Ok(t) => plan.targets.push(t),
+            Err(e) => plan.skipped.push(format!("{}: {e:#}", item.title)),
+        }
+    }
+    ensure!(!plan.targets.is_empty(), "Không có dự án hợp lệ để xuất MP4.\n{}", plan.skipped.join("\n\n"));
+    Ok(plan)
+}
+pub fn request_export(data: &Path, id: &str, item_id: Option<&str>, output: &Path) -> Result<Batch> {
+    let plan = preview_export(data, id, item_id, output)?;
+    queue_export(data, &plan, false)
+}
+/// Confirmation is tied to the inspected file versions and checked again by the worker.
+pub fn queue_export(data: &Path, plan: &ExportPlan, overwrite: bool) -> Result<Batch> {
+    let _global = Lease::acquire(&data.join("runtime/batch.lock"))?;
+    let _queue = Lease::acquire(&root(data, &plan.batch_id)?.join("queue.lock"))?;
+    let current = preview_export(data, &plan.batch_id, plan.item_id.as_deref(), &plan.folder)?;
+    ensure!(&current == plan, "Dữ liệu dự án hoặc MP4 đích đã thay đổi. Bấm Xuất để kiểm tra và xác nhận lại.");
+    ensure!(overwrite || plan.existing_count() == 0, "Đã có {} file MP4 đích. Cần xác nhận xuất lại trước khi tiếp tục.", plan.existing_count());
+    let mut b = Batch::load(&root(data, &plan.batch_id)?.join("batch.json"))?;
+    let ids: Vec<_> = plan.targets.iter().map(|t|t.item_id.clone()).collect();
+    // Do not discard a stopped export when a different subset is requested.
+    for i in &mut b.items {
+        if i.export_only && matches!(i.state, State::Pending | State::Interrupted | State::Cancelled) && !ids.contains(&i.id) {
+            i.state = State::Ready;
+            i.stage = "ready".into();
+            i.message = "Chưa xuất MP4; timeline được giữ lại.".into();
+        }
+        if ids.contains(&i.id) {
+            i.export_only = true;
+            i.force_export = true;
+            i.export_existing = plan.targets.iter().find(|t|t.item_id == i.id).and_then(|t|t.existing.clone());
+            i.state = State::Pending;
+            i.stage = "Export".into();
+            i.message = "Chờ xuất MP4 từ timeline đã lưu".into();
+            i.auto_retries = 0;
+            i.retry_at = 0;
+        }
+    }
+    b.run_items = Some(ids);
+    b.output_folder = Some(plan.folder.clone());
+    b.status = "queued".into();
+    b.save(data)?;
+    Ok(b)
 }
 pub fn recover(data: &Path, batch: &mut Batch) -> Result<()> {
     if running(data) {
@@ -613,7 +756,6 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
     let folder = root(data, id)?.join("attempts").join(&item.attempt_id);
     fs::create_dir_all(&folder)?;
     let path = project_path(data, &item)?;
-    let _lease = Lease::acquire(&path.parent().unwrap().join("batch-owner.lock"))?;
     let cancel = process::cancel_token();
     let finished = process::cancel_token();
     let watcher = {
@@ -654,16 +796,24 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
     };
     let mut title = item.title.clone();
     let result = (|| -> Result<Option<PathBuf>> {
+        // Check before taking a lease: Lease::acquire creates its parent folder.
+        ensure!(path.is_file(), "Không tìm thấy dữ liệu dự án: {}. Khôi phục thư mục dự án hoặc tạo lại từ URL; MP4 cũ vẫn được giữ.", path.display());
+        let _lease = Lease::acquire(&path.parent().unwrap().join("batch-owner.lock"))?;
         let mut settings = Settings::load(&root(data, id)?.join("settings.json"))?;
         // Authentication and cookie fixes can be applied without changing production choices.
         if let Ok(live) = Settings::load(&data.join("settings.json")) {
             settings.youtube_cookie_path = live.youtube_cookie_path;
             settings.youtube_download_folder = live.youtube_download_folder;
         }
-        let mut p = Project::load(&path)?;
+        let mut p = if item.export_only { export_project(&path, &item.project_id)? } else {
+            Project::load(&path).with_context(||format!("Không mở được dự án: {}", path.display()))?
+        };
         ensure_capacity(&p.root)?;
         let job = workflow::JobState::load(&p.root);
-        if job
+        if item.export_only {
+            p.validate(true).context("Không thể xuất timeline đã lưu")?;
+            p.check_duration()?;
+        } else if job
             .as_ref()
             .is_none_or(|j| j.status != workflow::Status::Complete)
         {
@@ -676,7 +826,7 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
             )?;
         }
         title = p.title.clone();
-        if !batch.auto_export {
+        if !batch.auto_export && !item.export_only {
             return Ok(None);
         }
         let base = batch.output_folder.as_ref().context("Thiếu nơi lưu MP4")?;
@@ -689,9 +839,12 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
         let outdir = base.join(format!("AIR3view-{}", p.id));
         fs::create_dir_all(&outdir)?;
         let output = outdir.join("final.mp4");
+        if item.force_export {
+            ensure!(ExportFile::read(&output)? == item.export_existing, "MP4 đích đã xuất hiện hoặc thay đổi sau khi kiểm tra: {}. Bấm Xuất và xác nhận xuất lại.", output.display());
+        }
         let receipt = outdir.join("batch-export.json");
         let key = receipt_key(&p);
-        if output.is_file()
+        if !item.force_export && output.is_file()
             && fs::read(&receipt)
                 .ok()
                 .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
@@ -728,11 +881,19 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
             "MP4 chưa đạt kiểm tra hình/tiếng/thời lượng"
         );
         process::check_cancel(&cancel)?;
-        if output.exists() {
-            let backup = outdir.join(format!("final.previous-{}.mp4", now()));
-            fs::rename(&output, backup)?;
+        if item.force_export {
+            ensure!(ExportFile::read(&output)? == item.export_existing, "MP4 đích đã thay đổi khi đang xuất: {}. Bản mới nằm ở final.partial.mp4; bấm Xuất để xác nhận lại.", output.display());
         }
-        fs::rename(pending, &output)?;
+        if output.exists() {
+            let backup = outdir.join(format!("final.previous-{}-{}.mp4", now(), uuid::Uuid::new_v4()));
+            fs::rename(&output, &backup).with_context(||format!("Không thay được MP4 cũ: {}. Đóng trình phát video đang mở file rồi thử lại.", output.display()))?;
+            if let Err(e) = fs::rename(&pending, &output) {
+                let _ = fs::rename(&backup, &output);
+                return Err(e).context("Không lưu được MP4 mới; đã thử khôi phục MP4 cũ");
+            }
+        } else {
+            fs::rename(&pending, &output)?;
+        }
         write_json(&receipt, &serde_json::json!({"key":key,"created_at":now()}))?;
         p.rendered = Some(output.clone());
         p.save()?;
@@ -806,8 +967,9 @@ pub fn run(data: &Path, id: &str, cli: &Path) -> Result<()> {
     let _global = Lease::acquire(&data.join("runtime/batch.lock"))?;
     let _queue = Lease::acquire(&root(data, id)?.join("queue.lock"))?;
     let mut batch = Batch::load(&root(data, id)?.join("batch.json"))?;
+    let scope = batch.run_items.clone();
     for item in &mut batch.items {
-        if matches!(
+        if scope.as_ref().is_none_or(|ids| ids.contains(&item.id)) && matches!(
             item.state,
             State::Running | State::Interrupted | State::Cancelled
         ) {
@@ -830,13 +992,15 @@ pub fn run(data: &Path, id: &str, cli: &Path) -> Result<()> {
         let Some(index) = batch
             .items
             .iter()
-            .position(|i| i.state == State::Pending && i.retry_at <= now())
+            .position(|i| batch.scheduled(i) && i.state == State::Pending && i.retry_at <= now())
         else {
-            if batch.items.iter().any(|i| i.state == State::Pending) {
+            if batch.items.iter().any(|i| batch.scheduled(i) && i.state == State::Pending) {
                 thread::sleep(Duration::from_millis(500));
                 continue;
             }
-            batch.status = if batch.items.iter().any(|i| i.state.retryable()) {
+            batch.status = if batch.items.iter().any(|i| i.state == State::Pending) {
+                "paused"
+            } else if batch.items.iter().any(|i| i.state.retryable()) {
                 "complete_with_errors"
             } else {
                 "complete"
@@ -1219,16 +1383,21 @@ mod tests {
             URLS.lines().next().unwrap(),
             &p,
             &s,
-            true,
+            false,
             Some(out),
         )
         .unwrap();
         let item = &mut b.items[0];
         item.state = State::Running;
+        item.export_only = true;
         item.attempt_id = uuid::Uuid::new_v4().to_string();
         let item = item.clone();
         b.save(temp.path()).unwrap();
         let mut p = Project::load(&project_path(temp.path(), &item).unwrap()).unwrap();
+        p.rules.min_seconds = 1;
+        p.rules.max_seconds = 10;
+        p.rules.hook_enabled = false;
+        p.rules.intercuts_enabled = false;
         let input = p.root.join("source.mp4");
         let cancel = process::cancel_token();
         process::run(
@@ -1281,16 +1450,7 @@ mod tests {
         }];
         p.ensure_composition();
         p.save().unwrap();
-        let job = workflow::JobState {
-            id: uuid::Uuid::new_v4().to_string(),
-            project_id: p.id.clone(),
-            fingerprint: String::new(),
-            stage_keys: Default::default(),
-            phase: workflow::Phase::Ready,
-            status: workflow::Status::Complete,
-            message: String::new(),
-        };
-        write_json(&p.root.join("workflow.json"), &job).unwrap();
+        assert!(!p.root.join("workflow.json").exists());
         run_item(temp.path(), &b.id, &item.id).unwrap();
         let folder = root(temp.path(), &b.id)
             .unwrap()
@@ -1308,5 +1468,114 @@ mod tests {
             "A resumed verified export must not be overwritten"
         );
         assert!(media::probe(&s, &output, &cancel).unwrap().has_audio);
+        assert!(!p.root.join("workflow.json").exists(), "Manual export must never start analysis or TTS, even without an automatic workflow checkpoint");
+        b.items[0].force_export = true;
+        b.items[0].export_existing = ExportFile::read(&output).unwrap();
+        b.save(temp.path()).unwrap();
+        run_item(temp.path(), &b.id, &item.id).unwrap();
+        let forced: Outcome = serde_json::from_slice(&fs::read(folder.join("outcome.json")).unwrap()).unwrap();
+        assert!(forced.ok, "{}", forced.error);
+        assert_ne!(before, fs::metadata(&output).unwrap().modified().unwrap());
+        assert!(fs::read_dir(output.parent().unwrap()).unwrap().flatten().any(|e|e.file_name().to_string_lossy().starts_with("final.previous-")));
+    }
+    fn export_fixture(data: &Path, item: &Item) {
+        let path = project_path(data, item).unwrap();
+        let mut p = Project::load(&path).unwrap();
+        let source = p.root.join("source.mp4");
+        fs::write(&source, b"preflight fixture (not decoded)").unwrap();
+        p.sources[0].path = source;
+        p.sources[0].duration_ms = 2000;
+        p.rules.min_seconds = 1; p.rules.max_seconds = 3;
+        p.rules.hook_enabled = false; p.rules.intercuts_enabled = false;
+        p.evidence_settings.enabled = false;
+        p.segments = vec![Segment { source_id: "src_1".into(), out_ms: 2000, duration_ms: 2000, ..Default::default() }];
+        p.ensure_composition(); p.save().unwrap();
+    }
+    #[test]
+    fn export_preflight_skips_missing_projects_and_requires_fresh_output_confirmation() {
+        let (temp, p, s) = setup();
+        let mut b = create(temp.path(), "preflight", URLS, &p, &s, false, None).unwrap();
+        for item in &mut b.items { item.state = State::Ready; }
+        export_fixture(temp.path(), &b.items[0]);
+        // Missing project.json and missing referenced media must both be explained.
+        let missing = project_path(temp.path(), &b.items[1]).unwrap();
+        fs::remove_dir_all(missing.parent().unwrap()).unwrap();
+        export_fixture(temp.path(), &b.items[2]);
+        fs::remove_file(project_path(temp.path(), &b.items[2]).unwrap().parent().unwrap().join("source.mp4")).unwrap();
+        b.save(temp.path()).unwrap();
+        let plan = preview_export(temp.path(), &b.id, None, temp.path()).unwrap();
+        assert_eq!(plan.targets.len(), 1); assert_eq!(plan.skipped.len(), 2);
+        assert!(plan.skipped[0].contains("dữ liệu dự án"));
+        assert!(plan.skipped[1].contains("Thiếu video nguồn"));
+        assert!(!missing.parent().unwrap().exists());
+        let output = &plan.targets[0].output;
+        fs::create_dir_all(output.parent().unwrap()).unwrap(); fs::write(output, b"original MP4").unwrap();
+        // A file appearing after preview invalidates the review, even with overwrite permission.
+        assert!(queue_export(temp.path(), &plan, true).unwrap_err().to_string().contains("đã thay đổi"));
+        let plan = preview_export(temp.path(), &b.id, None, temp.path()).unwrap();
+        let unchanged = fs::read(root(temp.path(), &b.id).unwrap().join("batch.json")).unwrap();
+        assert!(queue_export(temp.path(), &plan, false).unwrap_err().to_string().contains("xác nhận"));
+        assert_eq!(fs::read(root(temp.path(), &b.id).unwrap().join("batch.json")).unwrap(), unchanged);
+        assert_eq!(fs::read(output).unwrap(), b"original MP4");
+        let queued = queue_export(temp.path(), &plan, true).unwrap();
+        assert_eq!(queued.run_items, Some(vec![b.items[0].id.clone()]));
+        assert!(queued.items[0].force_export && queued.items[0].export_existing.is_some());
+        // With every valid project gone, don't queue work or recreate its directory.
+        let valid = project_path(temp.path(), &b.items[0]).unwrap();
+        fs::remove_dir_all(valid.parent().unwrap()).unwrap();
+        assert!(preview_export(temp.path(), &b.id, None, temp.path()).unwrap_err().to_string().contains("Không có dự án hợp lệ"));
+        assert!(!valid.parent().unwrap().exists());
+        assert_eq!(fs::read(output).unwrap(), b"original MP4");
+        // Defensive worker path also records a readable outcome, without making a ghost project.
+        let mut queued = queued; queued.items[0].state = State::Running;
+        queued.items[0].attempt_id = uuid::Uuid::new_v4().to_string(); queued.save(temp.path()).unwrap();
+        run_item(temp.path(), &queued.id, &queued.items[0].id).unwrap();
+        let outcome: Outcome = serde_json::from_slice(&fs::read(root(temp.path(), &queued.id).unwrap().join("attempts").join(&queued.items[0].attempt_id).join("outcome.json")).unwrap()).unwrap();
+        assert!(!outcome.ok && outcome.error.contains("Không tìm thấy dữ liệu dự án"));
+        assert!(!valid.parent().unwrap().exists());
+    }
+    #[test]
+    fn manual_exports_scope_single_and_all_without_running_unready_urls_or_changing_projects() {
+        let (temp, p, s) = setup();
+        let mut b = create(temp.path(), "exports", URLS, &p, &s, false, None).unwrap();
+        b.items[0].state = State::Ready;
+        b.items[1].state = State::Exported;
+        b.items[1].output = Some(temp.path().join("existing.mp4"));
+        export_fixture(temp.path(), &b.items[0]);
+        export_fixture(temp.path(), &b.items[1]);
+        b.save(temp.path()).unwrap();
+        let before: Vec<_> = b.items.iter().map(|i| fs::read(project_path(temp.path(),i).unwrap()).unwrap()).collect();
+        let item = b.items[1].id.clone();
+        let queued = request_export(temp.path(), &b.id, Some(&item), temp.path()).unwrap();
+        assert_eq!(queued.run_items, Some(vec![item.clone()]));
+        assert_eq!(queued.items[0].state, State::Ready);
+        assert_eq!(queued.items[2].state, State::Pending);
+        assert!(!queued.items[2].export_only && !queued.scheduled(&queued.items[2]));
+        assert!(queued.items[1].export_only && queued.resumable());
+        assert_eq!(queued.items[1].output, b.items[1].output);
+        let all = request_export(temp.path(), &b.id, None, temp.path()).unwrap();
+        assert_eq!(all.run_items.as_ref().unwrap().len(),2);
+        assert!(!all.scheduled(&all.items[2]));
+        for (i, bytes) in all.items.iter().zip(before) {assert_eq!(fs::read(project_path(temp.path(), i).unwrap()).unwrap(),bytes);}
+        assert!(request_export(temp.path(), &b.id, Some(&all.items[2].id), temp.path()).is_err());
+        assert!(request_export(temp.path(), &b.id, None, Path::new("missing-output")).is_err());
+        let mut restarted = Batch::load(&root(temp.path(),&b.id).unwrap().join("batch.json")).unwrap();
+        restarted.status = "running".into();
+        assert!(restarted.reserved(&restarted.items[0].project_id));
+        assert!(!restarted.reserved(&restarted.items[2].project_id));
+        restarted.items[0].state = State::Failed;
+        apply_action(&mut restarted, Action::RetryAll);
+        assert!(restarted.run_items.is_none());
+        assert!(restarted.items[0].export_only && !restarted.items[2].export_only);
+        #[cfg(windows)] {
+            let _lease = Lease::acquire(&temp.path().join("runtime/batch.lock")).unwrap();
+            assert!(request_export(temp.path(), &b.id, None, temp.path()).is_err());
+        }
+        // Older manifests must load with their original workflow behaviour.
+        let mut legacy = serde_json::to_value(&b).unwrap();
+        legacy.as_object_mut().unwrap().remove("run_items");
+        for i in legacy["items"].as_array_mut().unwrap() {i.as_object_mut().unwrap().remove("export_only");}
+        let legacy: Batch = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.run_items.is_none() && legacy.items.iter().all(|i|!i.export_only));
     }
 }

@@ -127,9 +127,7 @@ pub fn export_with_progress<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:
     result
 }
 
-fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,progress:&mut F,report:&mut RenderReport)->Result<()> {
-    p.card_sound.validate()?;
-    let metadata=crate::export_metadata::prepare(p,s)?;
+pub(crate) fn validate_assets(p:&Project)->Result<()> {
     let composition=p.composition_snapshot();composition.validate()?;
     crate::evidence::validate(p)?;
     for c in composition.clips.iter().filter(|c|c.enabled(p)) {
@@ -141,6 +139,14 @@ fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel
     for c in composition.clips.iter().filter(|c|!c.audio()&&c.enabled(p)&&(c.evidence_id.is_some()||(c.track==BACKGROUND&&c.still()))){
         anyhow::ensure!(c.media.as_ref().is_some_and(|m|m.is_file()),"Thiếu ảnh dẫn chứng cho layer {}",c.id);
     }
+    Ok(())
+}
+
+fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,progress:&mut F,report:&mut RenderReport)->Result<()> {
+    p.card_sound.validate()?;
+    let metadata=crate::export_metadata::prepare(p,s)?;
+    validate_assets(p)?;
+    let composition=p.composition_snapshot();
     let end=composition.duration_ms();anyhow::ensure!(end>0,"Composition rỗng");
     let folder=p.root.join("cache/composition-chunks");fs::create_dir_all(&folder)?;
     let intervals=intervals(p,&composition,end);

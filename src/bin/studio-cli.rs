@@ -16,6 +16,16 @@ fn main() -> Result<()> {
             println!("{}",serde_json::to_string_pretty(&batch)?);
         },
         Some("batch-run")=>reaction_studio::batch::run(&data_dir(),args.get(2).context("batch-run <batch-id>")?,&std::env::current_exe()?)?,
+        Some("batch-export")=>{
+            let id=args.get(2).context("batch-export <batch-id> <output-folder> [item-id] [--overwrite]")?;
+            let folder=Path::new(args.get(3).context("output-folder")?);
+            let item=args.get(4).filter(|a|a.as_str()!="--overwrite").map(String::as_str);
+            let plan=reaction_studio::batch::preview_export(&data_dir(),id,item,folder)?;
+            for reason in &plan.skipped { eprintln!("Bỏ qua: {reason}"); }
+            let b=reaction_studio::batch::queue_export(&data_dir(),&plan,args.iter().any(|a|a=="--overwrite"))?;
+            println!("{}",serde_json::json!({"batch_id":b.id,"queued":b.run_items.as_ref().map_or(0,Vec::len)}));
+            reaction_studio::batch::run(&data_dir(),id,&std::env::current_exe()?)?;
+        },
         Some("batch-item")=>reaction_studio::batch::run_item(&data_dir(),args.get(2).context("batch-item <batch-id> <item-id>")?,args.get(3).context("item-id")?)?,
         Some("batch-action")=>{
             let action:reaction_studio::batch::Action=serde_json::from_str(args.get(3).context("batch-action <batch-id> <action-json>")?)?;

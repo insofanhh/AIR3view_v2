@@ -790,7 +790,10 @@ impl StudioApp {
                             Page::Batch => "Xử lý hàng loạt",
                             Page::Settings => "Cài đặt kết nối",
                         }).size(24.0).strong());
-                        ui.add(egui::Label::new(RichText::new(&self.project.title).color(MUTED).size(12.0)).truncate());
+                        let subtitle = if self.page == Page::Batch {
+                            self.selected_batch().map(|b| b.title.as_str()).unwrap_or("Chọn phiên chạy để xuất MP4")
+                        } else { &self.project.title };
+                        ui.add(egui::Label::new(RichText::new(subtitle).color(MUTED).size(12.0)).truncate());
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().interact_size.y = 34.0;
@@ -800,11 +803,19 @@ impl StudioApp {
                                 self.message("Đang hủy. Request cloud đã gửi có thể vẫn tiếp tục trên máy chủ.", false);
                             }
                         } else {
-                            let hint = self.export_location.folder().map(|folder| format!("Lưu vào {}\\AIR3view-{}\\final.mp4", folder.display(), self.project.id))
-                                .unwrap_or_else(|| "Chọn thư mục lưu lần đầu; tự ghi nhớ cho những lần sau.".into());
-                            let export = primary(ui, "Xuất MP4  ↗").on_hover_text(hint);
+                            let batch_page = self.page == Page::Batch;
+                            let hint = if batch_page {
+                                self.selected_batch().map(|b| format!("Xuất {}/{} dự án sẵn sàng trong phiên ‘{}’. Mỗi dự án có thư mục MP4 riêng.",b.items.iter().filter(|i|i.can_export()).count(),b.items.len(),b.title))
+                                    .unwrap_or_else(|| "Chọn phiên chạy cần xuất MP4.".into())
+                            } else { self.export_location.folder().map(|folder| format!("Lưu vào {}\\AIR3view-{}\\final.mp4", folder.display(), self.project.id))
+                                .unwrap_or_else(|| "Chọn thư mục lưu lần đầu; tự ghi nhớ cho những lần sau.".into())
+                            };
+                            let enabled = !batch_page || self.batch_export_enabled();
+                            let export = ui.add_enabled_ui(enabled, |ui| primary(ui, if batch_page {"Xuất MP4 cả phiên  ↗"} else {"Xuất MP4  ↗"})).inner.on_hover_text(&hint).on_disabled_hover_text(hint);
                             #[cfg(test)] self.hitboxes.insert("top_export".into(), export.rect);
-                            if export.clicked() { self.launch(Task::Render); }
+                            if export.clicked() {
+                                if batch_page { self.export_batch(None); } else { self.launch(Task::Render); }
+                            }
                             let mut choose = false;
                             let mut choose_source = false;
                             let mut reset_source = false;
@@ -2273,6 +2284,7 @@ impl StudioApp {
                 });
         }
         self.delete_project_dialog(ctx);
+        self.batch_export_dialog(ctx);
         self.evidence_source_window(ctx);
         self.metadata_window(ctx);
         self.updates_window(ctx);

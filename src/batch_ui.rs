@@ -25,10 +25,15 @@ pub(super) struct BatchView {
     rx: mpsc::Receiver<anyhow::Result<(Batch, bool)>>,
     excluded: std::collections::BTreeSet<String>,
     detail: String,
+    pending_export: Option<batch::ExportPlan>,
+    export_checking: bool,
+    export_tx: mpsc::Sender<anyhow::Result<batch::ExportPlan>>,
+    export_rx: mpsc::Receiver<anyhow::Result<batch::ExportPlan>>,
 }
 impl BatchView {
     pub fn load(data: &std::path::Path) -> Self {
         let (tx, rx) = mpsc::channel();
+        let (export_tx, export_rx) = mpsc::channel();
         let mut batches = batch::list(data);
         for b in &mut batches {
             let _ = batch::recover(data, b);
@@ -51,6 +56,10 @@ impl BatchView {
             rx,
             excluded: Default::default(),
             detail: String::new(),
+            pending_export: None,
+            export_checking: false,
+            export_tx,
+            export_rx,
         }
     }
     fn visible_sessions(&mut self,today:crate::date_filter::Date)->Vec<String> {
@@ -77,8 +86,100 @@ impl BatchView {
     }
 }
 impl StudioApp {
+    pub(super) fn selected_batch(&self) -> Option<&Batch> {
+        self.batch_view.batches.iter().find(|b| b.id == self.batch_view.selected)
+    }
+    pub(super) fn batch_export_enabled(&self) -> bool {
+        !self.busy && !self.batch_view.active && !self.batch_view.creating && !self.batch_view.export_checking
+            && self.selected_batch().is_some_and(|b| b.items.iter().any(|i| i.can_export()))
+    }
+    pub(super) fn export_batch(&mut self, item_id: Option<&str>) {
+        if !self.batch_export_enabled() {
+            self.message("Chờ tác vụ hiện tại hoàn tất; phiên cần có dự án sẵn sàng xuất.", true);
+            return;
+        }
+        let Some(b) = self.selected_batch().cloned() else { return; };
+        let targets: Vec<_> = b.items.iter().filter(|i| i.can_export() && item_id.is_none_or(|id| i.id == id)).collect();
+        if targets.is_empty() {
+            self.message("Dự án chưa sẵn sàng xuất. Hoàn thành xử lý trước.", true);
+            return;
+        }
+        if targets.iter().any(|i| i.project_id == self.project.id) && self.dirty {
+            self.save();
+            if self.dirty { return; }
+        }
+        if self.export_location.folder().is_none() { self.choose_export_folder(); }
+        let Some(folder) = self.export_location.folder().map(|p| p.to_owned()) else { return; };
+        let data = self.projects_root.parent().unwrap().to_owned();
+        let tx = self.batch_view.export_tx.clone();
+        let item_id = item_id.map(str::to_owned);
+        self.batch_view.export_checking = true;
+        self.message("Đang kiểm tra dữ liệu dự án và MP4 đích…", false);
+        thread::spawn(move || { let _ = tx.send(batch::preview_export(&data, &b.id, item_id.as_deref(), &folder)); });
+    }
+    fn confirm_batch_export(&mut self, plan: batch::ExportPlan, overwrite: bool) {
+        if self.busy || self.batch_view.active || self.batch_view.creating {
+            self.message("Chờ tác vụ hiện tại hoàn tất rồi bấm Xuất lại.", true);
+            return;
+        }
+        let data = self.projects_root.parent().unwrap().to_owned();
+        match batch::queue_export(&data, &plan, overwrite) {
+            Ok(queued) => {
+                let count = queued.run_items.as_ref().map_or(0, Vec::len);
+                let skipped = plan.skipped.len();
+                if let Some(saved) = self.batch_view.batches.iter_mut().find(|v| v.id == plan.batch_id) { *saved = queued; }
+                self.player.stop();
+                self.start_batch(&plan.batch_id);
+                if self.batch_view.active {
+                    self.message(format!("Đang xuất {count} dự án từ timeline đã lưu · bỏ qua {skipped} dự án chưa hợp lệ. Lưu tại {}", plan.folder.display()), false);
+                }
+            }
+            Err(e) => self.message(format!("Không bắt đầu xuất MP4: {e:#}"), true),
+        }
+    }
+    pub(super) fn batch_export_dialog(&mut self, ctx: &egui::Context) {
+        let Some(plan) = self.batch_view.pending_export.clone() else { return; };
+        let existing = plan.existing_count();
+        let mut confirm = false;
+        let mut cancel = false;
+        let modal = egui::Modal::new(egui::Id::new("batch_export_confirmation")).show(ctx, |ui| {
+            ui.set_width(540.0_f32.min(ctx.screen_rect().width() - 60.0));
+            ui.heading(if existing > 0 { "MP4 đã tồn tại — xuất lại?" } else { "Kiểm tra trước khi xuất MP4" });
+            ui.label(format!("{} dự án hợp lệ · {} file đã tồn tại · {} dự án bị bỏ qua", plan.targets.len(), existing, plan.skipped.len()));
+            egui::ScrollArea::vertical().max_height((ctx.screen_rect().height()*0.5).min(350.)).show(ui, |ui| {
+                for target in plan.targets.iter().filter(|t|t.existing.is_some()) {
+                    ui.label(RichText::new(&target.title).strong());
+                    ui.add(egui::Label::new(target.output.to_string_lossy()).wrap());
+                }
+                if !plan.skipped.is_empty() {
+                    ui.separator(); ui.label(RichText::new("Không xuất các dự án sau:").strong());
+                    for reason in &plan.skipped { ui.add(egui::Label::new(reason).wrap()); }
+                }
+            });
+            ui.add_space(8.);
+            if existing > 0 { ui.label("Tạo MP4 mới từ timeline hiện tại. MP4 cũ được lưu thành final.previous-….mp4 khi bản mới xuất thành công."); }
+            ui.horizontal(|ui| {
+                let r = ui.button("Hủy"); cancel = r.clicked();
+                #[cfg(test)] self.hitboxes.insert("batch_export_cancel".into(), r.rect);
+                let r = ui.add_enabled(!self.busy && !self.batch_view.active && !self.batch_view.creating,
+                    egui::Button::new(if existing > 0 { "Xác nhận xuất lại".into() } else { format!("Xuất {} dự án hợp lệ", plan.targets.len()) }));
+                confirm = r.clicked();
+                #[cfg(test)] self.hitboxes.insert("batch_export_confirm".into(), r.rect);
+            });
+        });
+        if cancel || modal.should_close() { self.batch_view.pending_export = None; }
+        if confirm { self.batch_view.pending_export = None; self.confirm_batch_export(plan, existing > 0); }
+    }
     pub(super) fn poll_batch(&mut self) {
         let data = self.projects_root.parent().unwrap().to_owned();
+        while let Ok(result) = self.batch_view.export_rx.try_recv() {
+            self.batch_view.export_checking = false;
+            match result {
+                Ok(plan) if plan.existing_count() > 0 || !plan.skipped.is_empty() => self.batch_view.pending_export = Some(plan),
+                Ok(plan) => self.confirm_batch_export(plan, false),
+                Err(e) => self.message(format!("Không bắt đầu xuất MP4: {e:#}"), true),
+            }
+        }
         while let Ok(result) = self.batch_view.rx.try_recv() {
             self.batch_view.creating = false;
             match result {
@@ -128,10 +229,14 @@ impl StudioApp {
         }
         let data = self.projects_root.parent().unwrap().to_owned();
         let result = (|| -> anyhow::Result<_> {
-            let b = Batch::load(&batch::root(&data, id)?.join("batch.json"))?;
+            let mut b = Batch::load(&batch::root(&data, id)?.join("batch.json"))?;
+            if !b.resumable() && b.items.iter().any(|i| matches!(i.state, State::Pending | State::Interrupted | State::Cancelled)) {
+                b.run_items = None;
+                b.save(&data)?;
+            }
             if b.items
                 .iter()
-                .any(|i| i.project_id == self.project.id && !i.state.complete())
+                .any(|i| b.scheduled(i) && i.project_id == self.project.id && !i.state.complete())
             {
                 if self.dirty {
                     self.save();
@@ -513,9 +618,10 @@ impl StudioApp {
             .cloned()?;
         ui.add(egui::Label::new(RichText::new(&b.title).strong()).truncate()).on_hover_text(session_label(&b));
         let complete = b.items.iter().filter(|i| i.state.complete()).count();
+        let exported = b.items.iter().filter(|i| i.state == State::Exported).count();
         let failed = b.items.iter().filter(|i| i.state.retryable()).count();
         ui.add(egui::Label::new(format!(
-            "{complete}/{} hoàn thành · {failed} cần xử lý · {}",
+            "{complete}/{} hoàn thành · {exported} đã xuất MP4 · {failed} cần xử lý · {}",
             b.items.len(),
             session_status(&b),
         )).wrap());
@@ -586,6 +692,7 @@ impl StudioApp {
         };
         let Some((b,mut action,start,mut retry_start))=selected else {return;};
         let mut open=None;
+        let mut export_item=None;
         ui.add_space(8.);
         ui.separator();
         egui::ScrollArea::vertical()
@@ -605,7 +712,9 @@ impl StudioApp {
                         ui.horizontal_wrapped(|ui| {
                             chip(
                                 ui,
-                                item.state.label(),
+                                if item.export_only && item.state == State::Pending { "Chờ xuất MP4" }
+                                else if item.export_only && item.state == State::Running { "Đang xuất MP4" }
+                                else { item.state.label() },
                                 if item.state.complete() {
                                     TEAL
                                 } else if item.state == State::Failed {
@@ -639,6 +748,16 @@ impl StudioApp {
                             }else{ui.add(egui::Label::new(&item.message).wrap());}
                         }
                         ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().interact_size.y = 30.;
+                            let export = ui.add_enabled(
+                                !self.busy && !self.batch_view.active && !self.batch_view.creating && !self.batch_view.export_checking && item.can_export(),
+                                egui::Button::new(if item.state == State::Exported { "Xuất lại" } else { "Xuất" }).min_size(Vec2::new(64.,30.)),
+                            ).on_hover_text("Xuất MP4 riêng dự án này từ timeline đã lưu.")
+                                .on_disabled_hover_text("Hoàn thành xử lý và chờ tác vụ đang chạy kết thúc trước khi xuất.");
+                            #[cfg(test)] {
+                                self.hitboxes.insert(format!("batch_export_{index}"),export.rect);
+                            }
+                            if export.clicked() { export_item=Some(item.id.clone()); }
                             if ui
                                 .add_enabled(
                                     !matches!(item.state, State::Pending | State::Running)
@@ -708,6 +827,7 @@ impl StudioApp {
         if let Some(path) = open {
             self.open(path);
         }
+        if let Some(id) = export_item { self.export_batch(Some(&id)); }
         if !self.batch_view.detail.is_empty() {
             let mut showing = true;
             egui::Window::new("Nhật ký tác vụ hàng loạt")
@@ -759,10 +879,99 @@ fn read_tail(path: &std::path::Path, item_id: &str) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn missing_project_preflight_runs_in_background_and_never_starts_a_worker() {
+        let ctx = egui::Context::default();
+        let mut app = StudioApp::from_context(&ctx); app.capture_path = None;
+        let data = app.projects_root.parent().unwrap().to_owned();
+        let mut b = batch::create(&data,"Deleted project QA","https://youtu.be/dBy-8s6ly08",&app.project,&app.settings,false,None).unwrap();
+        b.items[0].state=State::Ready; b.save(&data).unwrap();
+        let path=batch::project_path(&data,&b.items[0]).unwrap(); fs::remove_file(&path).unwrap();
+        let output=tempfile::tempdir().unwrap(); app.export_location.remember(output.path().to_owned()).unwrap();
+        app.batch_view.selected=b.id.clone(); app.batch_view.batches=vec![b.clone()];
+        let before=fs::read(batch::root(&data,&b.id).unwrap().join("batch.json")).unwrap();
+        app.export_batch(None);
+        assert!(app.batch_view.export_checking && !app.batch_export_enabled());
+        let started=Instant::now();
+        while app.batch_view.export_checking && started.elapsed()<Duration::from_secs(10) {app.poll_batch();thread::sleep(Duration::from_millis(10));}
+        assert!(!app.batch_view.export_checking);
+        assert!(app.is_error && app.notice.contains("Không đọc được dữ liệu dự án"));
+        assert!(!app.batch_view.active && app.batch_view.child.is_none());
+        assert!(!path.exists() && !path.parent().unwrap().join("batch-owner.lock").exists());
+        assert_eq!(fs::read(batch::root(&data,&b.id).unwrap().join("batch.json")).unwrap(),before);
+    }
+    #[test]
+    fn export_confirmation_fits_screen_and_cancel_keeps_output_and_queue_unchanged() {
+        for width in [540.,1080.,1440.] {
+            let ctx = egui::Context::default();
+            let mut app = StudioApp::from_context(&ctx); app.capture_path = None;
+            let temp = tempfile::tempdir().unwrap();
+            let output = temp.path().join("final.mp4"); fs::write(&output,b"keep existing video").unwrap();
+            app.batch_view.pending_export = Some(batch::ExportPlan {
+                batch_id:"confirmation-test".into(), item_id:None, folder:temp.path().to_owned(),
+                targets:vec![batch::ExportTarget {item_id:"item".into(), title:"Video đã xuất".into(),output:output.clone(),
+                    existing:Some(batch::ExportFile {path:output.clone(),bytes:19,modified_ns:0})}],
+                skipped:vec!["Video 2: Không đọc được dữ liệu dự án: C:/projects/missing/project.json. Khôi phục thư mục dự án hoặc tạo lại từ URL; MP4 cũ vẫn được giữ.".into()],
+            });
+            let screen = Rect::from_min_size(Pos2::ZERO,Vec2::new(width,720.));
+            let draw = |app:&mut StudioApp,events| {ctx.run(egui::RawInput {screen_rect:Some(screen),events,..Default::default()},|ctx|app.batch_export_dialog(ctx))};
+            let mut text=String::new();
+            for _ in 0..3 { let out=draw(&mut app,vec![]); text=out.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape{Some(t.galley.text())}else{None}).collect::<Vec<_>>().join(" "); }
+            assert!(text.contains("Xác nhận xuất lại") && text.contains("Không xuất các dự án sau"));
+            for key in ["batch_export_cancel","batch_export_confirm"] {assert!(screen.contains_rect(app.hitboxes[key]),"{key} exceeds {width}");}
+            let pos = app.hitboxes["batch_export_cancel"].center();
+            for pressed in [true,false] {let _=draw(&mut app,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);}
+            assert!(app.batch_view.pending_export.is_none());
+            assert!(!app.batch_view.active && app.batch_view.child.is_none());
+            assert_eq!(fs::read(output).unwrap(),b"keep existing video");
+        }
+    }
+    #[test]
+    fn export_buttons_fit_rows_and_toolbar_targets_the_selected_session_with_an_empty_editor() {
+        for width in [280.,540.,1080.] {
+            let ctx=egui::Context::default();
+            let mut app=StudioApp::from_context(&ctx);app.capture_path=None;
+            let data=app.projects_root.parent().unwrap().to_owned();
+            let mut b=batch::create(&data,"Phiên xuất MP4","https://youtu.be/dBy-8s6ly08\nhttps://youtu.be/r1cvbJJ5G54",&app.project,&app.settings,false,None).unwrap();
+            b.items[0].state=State::Ready;b.save(&data).unwrap();
+            app.batch_view.selected=b.id.clone();app.batch_view.batches=vec![b.clone()];
+            assert!(app.project.segments.is_empty());
+            assert!(app.batch_export_enabled(),"Export must use the session, not the empty editor");
+            let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width,900.));
+            for _ in 0..3 {let _=ctx.run(egui::RawInput{screen_rect:Some(screen),..Default::default()},|ctx|{
+                egui::CentralPanel::default().show(ctx,|ui|app.batch_page(ui));
+            });}
+            for key in ["batch_export_0","batch_export_1"] {
+                let r=app.hitboxes[key];assert!(screen.contains_rect(r),"{key} outside {width}: {r:?}");assert!(r.height()>=30.);
+            }
+            app.batch_view.active=true;assert!(!app.batch_export_enabled());
+            app.export_batch(None);
+            assert!(app.is_error);
+            assert_eq!(Batch::load(&batch::root(&data,&b.id).unwrap().join("batch.json")).unwrap().items[0].state,State::Ready);
+            app.batch_view.active=false;
+            app.batch_view.batches[0].items[0].state=State::Pending;
+            assert!(!app.batch_export_enabled());
+        }
+        for width in [1080.,1440.] {
+            let ctx=egui::Context::default();let mut app=StudioApp::from_context(&ctx);app.capture_path=None;app.page=Page::Batch;
+            let data=app.projects_root.parent().unwrap().to_owned();
+            let mut b=batch::create(&data,"Phiên đang chọn","https://youtu.be/dBy-8s6ly08",&app.project,&app.settings,false,None).unwrap();
+            b.items[0].state=State::Ready;
+            app.batch_view.selected=b.id.clone();app.batch_view.batches=vec![b];
+            let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width,900.));
+            let mut text=String::new();
+            for _ in 0..3 {let out=ctx.run(egui::RawInput{screen_rect:Some(screen),..Default::default()},|ctx|app.draw(ctx));
+                text=out.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape{Some(t.galley.text())}else{None}).collect::<Vec<_>>().join(" ");}
+            assert!(text.contains("Xuất MP4 cả phiên"));
+            assert!(text.contains("Phiên đang chọn"));
+            assert!(screen.contains_rect(app.hitboxes["top_export"]));
+            assert!(!app.hitboxes["top_export"].intersects(app.hitboxes["top_export_location"]));
+        }
+    }
+    #[test]
     fn batch_header_keeps_filters_left_and_session_right_including_date_ranges() {
         for width in [820.,1080.,1440.] {
             let ctx=egui::Context::default();let mut app=StudioApp::from_context(&ctx);app.capture_path=None;
-            let b=Batch{version:1,id:"aaaaaa-header".into(),title:"Phiên hàng loạt có tên rất dài để kiểm tra bố cục bộ chọn phiên".into(),created_at:crate::date_filter::now(),status:"paused".into(),auto_export:false,output_folder:None,items:vec![]};
+            let b=Batch{version:1,id:"aaaaaa-header".into(),title:"Phiên hàng loạt có tên rất dài để kiểm tra bố cục bộ chọn phiên".into(),created_at:crate::date_filter::now(),status:"paused".into(),auto_export:false,output_folder:None,items:vec![],run_items:None};
             app.batch_view.selected=b.id.clone();app.batch_view.batches=vec![b];
             for period in [crate::date_filter::Period::All,crate::date_filter::Period::Range] {
                 app.batch_view.dates.period=period;
@@ -781,7 +990,7 @@ mod tests {
     fn date_filter_keeps_selection_inside_visible_sessions_and_distinguishes_duplicate_titles() {
         let temp=tempfile::tempdir().unwrap();
         let mut view=BatchView::load(temp.path());
-        let mut recent=Batch{version:1,id:"aaaaaa-recent".into(),title:"Đợt xử lý mới".into(),created_at:crate::date_filter::now(),status:"paused".into(),auto_export:false,output_folder:None,items:vec![]};
+        let mut recent=Batch{version:1,id:"aaaaaa-recent".into(),title:"Đợt xử lý mới".into(),created_at:crate::date_filter::now(),status:"paused".into(),auto_export:false,output_folder:None,items:vec![],run_items:None};
         let today=crate::date_filter::local_parts(recent.created_at).unwrap().0;
         let mut older=recent.clone();older.id="bbbbbb-older".into();older.created_at-=10*86400;older.status="running".into();
         view.selected=older.id.clone();view.batches=vec![recent.clone(),older.clone()];
