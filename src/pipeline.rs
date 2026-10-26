@@ -77,7 +77,7 @@ pub fn prepare(mut p: Project, s: Settings, tx: Sender<Event>, cancel: Cancel) -
             // Commit each download before doing any later expensive work.
             p.sources[index] = local.clone();
             p.save()?;
-            local.proxy = media::proxy(&s, &local, &p.root.join("cache/proxy"), &cancel)?;
+            crate::source_normalization::prepare(&p.normalization,&s,&mut local,&p.root,&cancel)?;
             p.sources[index] = local;
             p.save()?;
             let _ = tx.send(Event::Project(Box::new(p.clone())));
@@ -123,6 +123,7 @@ pub fn prepare(mut p: Project, s: Settings, tx: Sender<Event>, cancel: Cancel) -
     let downloads_tx = tx.clone();
     let downloads_cancel = cancel.clone();
     let root = p.root.clone();
+    let normalization=p.normalization.clone();
     let (mut analysis, download) = thread::scope(|scope| {
         let analysis = scope.spawn(move || {
             stage(
@@ -170,12 +171,7 @@ pub fn prepare(mut p: Project, s: Settings, tx: Sender<Event>, cancel: Cancel) -
                     &format!("Video {}: tạo proxy preview", i + 1),
                     false,
                 );
-                local.proxy = media::proxy(
-                    &downloads_s,
-                    &local,
-                    &root.join("cache/proxy"),
-                    &downloads_cancel,
-                )?;
+                crate::source_normalization::prepare(&normalization,&downloads_s,&mut local,&root,&downloads_cancel)?;
                 sources.push(local);
             }
             stage(&downloads_tx, "Download", "Đã tải video và tạo proxy", true);

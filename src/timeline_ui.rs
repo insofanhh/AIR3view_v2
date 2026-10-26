@@ -4,7 +4,7 @@ use crate::{
     timeline_media::{self, Data, MediaCache, Request},
 };
 
-const HEIGHTS: [f32; TRACK_COUNT] = [48., 34., 38., 38., 31., 32., 28., 40., 32., 32.];
+const HEIGHTS: [f32; TRACK_COUNT] = [48., 34., 38., 38., 31., 32., 28., 40., 32., 32., 38.];
 const HEADER: f32 = 152.;
 const RULER: f32 = 27.;
 const GOLD: Color32 = Color32::from_rgb(240, 192, 91);
@@ -21,6 +21,7 @@ fn color(track: usize) -> Color32 {
         Color32::from_rgb(105,190,230),
         Color32::from_rgb(230,105,90),
         Color32::from_rgb(184,151,235),
+        Color32::from_rgb(100,195,155),
     ][track]
 }
 
@@ -535,7 +536,7 @@ impl StudioApp {
                                 Align2::CENTER_CENTER,
                                 if lock {
                                     "K"
-                                } else if track == VOICE || track == ORIGINAL || track==SFX {
+                                } else if matches!(track,VOICE|ORIGINAL|SFX|MUSIC) {
                                     "M"
                                 } else {
                                     "Ẩ"
@@ -551,7 +552,7 @@ impl StudioApp {
                             }
                             response.on_hover_text(if lock {
                                 "Khóa/mở track • bảo vệ các cảnh liên kết"
-                            } else if track == VOICE || track == ORIGINAL || track==SFX {
+                            } else if matches!(track,VOICE|ORIGINAL|SFX|MUSIC) {
                                 "Tắt/bật tiếng track • có hiệu lực khi preview/render"
                             } else {
                                 "Ẩn/hiện track • có hiệu lực khi preview/render"
@@ -696,6 +697,7 @@ impl StudioApp {
                                             }
                                         }
                                         ORIGINAL => if seg.kind=="review" {"Tiếng gốc nền".into()}else{"Âm thanh gốc".into()},
+                                        MUSIC => "Nhạc nền".into(),
                                         CAPTIONS => {
                                             if seg.caption.is_empty() {
                                                 seg.narration.clone()
@@ -786,8 +788,8 @@ impl StudioApp {
                                             }
                                         }
                                     }
-                                    if track == VOICE || track == ORIGINAL || track==SFX {
-                                        let path = if track==SFX {layer.media.clone()}else if track == VOICE {
+                                    if matches!(track,VOICE|ORIGINAL|SFX|MUSIC) {
+                                        let path = if matches!(track,SFX|MUSIC) {layer.media.clone()}else if track == VOICE {
                                             seg.audio.clone()
                                         } else {
                                             self.project
@@ -1032,7 +1034,7 @@ impl StudioApp {
                 } else {
                     state.muted = !state.muted;
                 }
-                if track==VOICE || track==ORIGINAL {
+                if matches!(track,VOICE|ORIGINAL|SFX|MUSIC) {
                     self.dirty=true;self.project.rendered=None;
                     self.player.update_audio(&self.project);
                 } else {self.touch();}

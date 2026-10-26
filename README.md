@@ -34,6 +34,19 @@ Trong **Nơi lưu / metadata → Thư mục video nguồn YouTube → Đổi th�
 
 Thiết lập này tách biệt với thư mục xuất MP4. Video đã tải và video nhập từ máy giữ nguyên vị trí; đổi nơi lưu không di chuyển chúng, không chạy lại AI/giọng. Proxy, giọng, avatar và cache vẫn nằm trong dự án. Ổ nguồn đã chọn không còn khả dụng sẽ được báo để kết nối lại hoặc chọn nơi khác. Video nguồn ngoài thư mục dự án được giữ lại khi xóa dự án.
 
+## Nhạc nền, LUT, phản chiếu và chuẩn hóa nguồn
+
+Trong **02 / Hình ảnh đầu ra**, bấm tiêu đề từng nhóm để đóng/mở độc lập: tốc độ, tiếng gốc, khung video, nhân vật, màu/lật và dẫn chứng. Các nhóm âm thanh thẻ/ảnh nằm gọn trong phần dẫn chứng. Đóng nhóm chỉ thu gọn giao diện, không tắt tính năng đã chọn.
+
+Các mục **01 / Kịch bản**, **03 / Giọng, nhân vật & âm thanh**, **04 / Phụ đề** cũng có nhóm con đóng/mở riêng. Trong **Biên tập → Cảnh / Khung / Sub / Dẫn chứng**, bấm mũi tên ở tiêu đề để thu gọn vị trí layer, liên kết/âm lượng, nguồn cảnh, lời thoại, font/màu/vị trí sub hoặc nguồn/nội dung/chuyển động dẫn chứng. Mở/đóng nhóm giữ nguyên thông số đã nhập và không chạy lại pipeline.
+
+- **Thiết lập dự án → 03 / Giọng, nhân vật & âm thanh → Nhạc nền độc lập:** chọn MP3/WAV/M4A/FLAC/OGG, bật/tắt, chỉnh âm lượng, điểm bắt đầu bài, fade vào/ra, lặp nhạc có nối chuyển tiếp và mức giảm nhạc dưới lời host. Có tùy chọn tắt nhạc trong hook/cảnh nghe tiếng gốc. Nhạc nằm trên track **Nhạc nền**, tách khỏi voice, tiếng gốc và SFX; có thể ẩn/tắt tiếng, khóa, cắt/tách và chỉnh timing. Preview chuẩn bị audio ở luồng nền khi phát; tua và xuất dùng cùng bản nhạc đã chuẩn bị. Ducking cập nhật theo các clip voice hiện có khi bắt đầu phát/xuất.
+- File nhạc được sao chép vào asset của app, tối đa 256 MB, dài ít nhất 1 giây. Thông số và đường dẫn asset được nhớ cho dự án mới/phiên hàng loạt. Chuyển dự án sang máy khác cần mang theo các asset riêng, không chỉ `project.json`.
+- **02 / Hình ảnh → Màu sắc & lật footage:** lật ngang/dọc, LUT Ấm nhẹ/Lạnh nhẹ/Tài liệu nhẹ hoặc nhập `.cube`, chỉnh cường độ. Mặc định chỉ tác động footage và nền video, giữ host/phụ đề/thẻ nguyên chiều. Lật sẽ đảo chữ nằm sẵn trong video nguồn. LUT nhập hỗ trợ bảng 3D 2–65, miền RGB 0–1, tối đa 16 MB; LUT không hợp lệ có thông báo lỗi.
+- **Chọn layer → Màu & lật riêng layer → Ghi đè thiết lập dự án** để chỉnh từng layer. Bỏ ghi đè sẽ dùng lại thông số chung. Tick đồng bộ của track áp dụng các thay đổi màu/lật cho layer cùng loại có thể sửa; tôn trọng khóa layer/cảnh/nhóm. Tách/nhân bản giữ thiết lập màu riêng. Thông số màu/lật chung được nhớ cho các dự án sau; ghi đè theo ID thuộc dự án hiện tại.
+- **05 / Video nguồn → Chuẩn hóa video đầu vào:** Tự động, Giữ nguyên, Đóng gói lại (remux) hoặc Chuyển mã H.264/AAC; tùy chọn tạo proxy nhẹ. Áp dụng khi tải/nhập nguồn hoặc bấm **Áp dụng cho nguồn hiện có**. Tự động kiểm tra khả năng giải mã, mốc bắt đầu và tín hiệu HDR; HDR được tone map về SDR BT.709. File gốc được giữ nguyên, bản chuẩn hóa/proxy nằm trong cache dự án; báo cáo tại `cache/normalized`. Remux giữ codec nên không thay thế chuyển mã khi codec/container không tương thích.
+- Đổi nhạc/âm lượng không tạo lại AI, voice hoặc avatar. Đổi nhạc chỉ dựng lại phần audio, giữ cache hình đã xuất nếu hình ảnh không đổi. Màu/lật làm mất hiệu lực các đoạn hình bị tác động. Dự án cũ mặc định tắt nhạc/LUT/lật, các chỉ số track cũ được giữ nguyên.
+
 ## Tăng tốc footage và hook, giữ voice AI 1×
 
 Mở **Thiết lập dự án → Hình ảnh đầu ra → Tốc độ footage gốc / hook** (hoặc bảng **Khung** khi biên tập).
@@ -162,8 +175,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1 -SkipB
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-source.ps1
 ```
 
-- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.5-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
-- Source sạch: `dist/AIR3view-0.2.5-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
+- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.8-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
+- Source sạch: `dist/AIR3view-0.2.8-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
 - Package dùng danh sách runtime và ghi SHA256 trong `package-manifest.json`. Không sinh bản EXE dự phòng. Có file lạ ở thư mục đích thì script báo lỗi để tránh đưa nhầm vào release.
 - Giữ `Cargo.lock`. Unit test nằm trong module Rust, chỉ biên dịch khi chạy `scripts/build.cmd test --release --lib --locked`; không nằm trong EXE release.
 - `.gitignore` loại build/dist/runtime/dữ liệu local. Không commit key, cookie hay cấu hình cá nhân.

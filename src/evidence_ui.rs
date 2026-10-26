@@ -53,6 +53,9 @@ fn crop_ui(ui: &mut egui::Ui, id: &str, c: &mut [f32; 4]) {
 impl StudioApp {
     pub(super) fn card_sound_settings_ui(&mut self,ui:&mut egui::Ui) {
         ui.label(RichText::new("ÂM THANH THẺ THÔNG TIN").strong().color(MUTED));
+        self.card_sound_controls(ui);
+    }
+    fn card_sound_controls(&mut self,ui:&mut egui::Ui) {
         let old=self.project.card_sound.clone();
         let s=&mut self.project.card_sound;
         let _enabled=ui.checkbox(&mut s.enabled,"Sound effect khi thẻ xuất hiện");
@@ -85,6 +88,9 @@ impl StudioApp {
     }
     pub(super) fn evidence_sound_settings_ui(&mut self,ui:&mut egui::Ui) {
         ui.label(RichText::new("ÂM THANH ẢNH DẪN CHỨNG").strong().color(MUTED));
+        self.evidence_sound_controls(ui);
+    }
+    fn evidence_sound_controls(&mut self,ui:&mut egui::Ui) {
         let old=self.project.evidence_settings.clone();
         let s=&mut self.project.evidence_settings;
         ui.checkbox(&mut s.sound_enabled,"Sound effect khi ảnh xuất hiện");
@@ -115,6 +121,9 @@ impl StudioApp {
     }
     pub(super) fn evidence_settings_ui(&mut self, ui: &mut egui::Ui) {
         heading(ui, "DẪN CHỨNG CHO HOST");
+        self.evidence_settings_controls(ui);
+    }
+    pub(super) fn evidence_settings_controls(&mut self,ui:&mut egui::Ui) {
         let old=serde_json::to_vec(&self.project.evidence_settings).unwrap_or_default();
         let old_crop=self.project.evidence_settings.crop_percent;
         let s = &mut self.project.evidence_settings;
@@ -182,9 +191,8 @@ impl StudioApp {
             self.transform_changed();self.request_frame();
         }
         ui.separator();
-        self.card_sound_settings_ui(ui);
-        ui.separator();
-        self.evidence_sound_settings_ui(ui);
+        settings_group(ui, "output_card_sound", "Âm thanh thẻ thông tin", false, |ui| self.card_sound_controls(ui));
+        settings_group(ui, "output_evidence_sound", "Âm thanh ảnh dẫn chứng", false, |ui| self.evidence_sound_controls(ui));
         if old_crop!=self.project.evidence_settings.crop_percent && !self.project.segments.is_empty() {
             self.message("Đã đổi crop. Bấm Tạo thẻ / cập nhật ảnh dẫn chứng để áp dụng cho preview và xuất MP4.",false);
         }
@@ -379,8 +387,8 @@ impl StudioApp {
         let original = &seg.evidence_items[index];
         let mut item = original.clone();
         ui.separator();
-        ui.label(RichText::new("1 / Nguồn").strong());
         ui.add_enabled_ui(editable, |ui| {
+            settings_group(ui, "evidence_item_source", "1 / Nguồn & crop ảnh", true, |ui| {
             ui.checkbox(&mut item.enabled, "Hiện dẫn chứng");
             let source_ids: Vec<_> = self.project.sources.iter().map(|s| s.id.clone()).collect();
             let sources: Vec<_> = source_ids
@@ -443,8 +451,8 @@ impl StudioApp {
                     self.view_evidence_source(&item, true);
                 }
             }
-            ui.separator();
-            ui.label(RichText::new("2 / Nội dung").strong());
+            });
+            settings_group(ui, "evidence_item_content", "2 / Nội dung & chú thích", false, |ui| {
             choose(
                 ui,
                 "evidence_kind",
@@ -521,8 +529,8 @@ impl StudioApp {
                     item.annotations.push(Annotation::default());
                 }
             });
-            ui.separator();
-            ui.label(RichText::new("3 / Vị trí · chuyển động · thời điểm").strong());
+            });
+            settings_group(ui, "evidence_item_motion", "3 / Vị trí, chuyển động & thời điểm", false, |ui| {
             choose(
                 ui,
                 "evidence_slot",
@@ -581,6 +589,7 @@ impl StudioApp {
                     _ => "ước lượng; chạy Căn từ để chính xác",
                 }
             ));
+            });
         });
         let changed = serde_json::to_vec(&item).ok() != serde_json::to_vec(original).ok();
         if changed && editable {

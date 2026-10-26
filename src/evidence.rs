@@ -704,7 +704,7 @@ pub fn prepare(
                         String::new()
                     },
                     p.evidence_settings.crop_percent,
-                    "evidence-card-v8-adaptive-photo",
+                    "evidence-card-v9-no-source-footer",
                     &p.rules.language,
                 ))
                 .unwrap_or_default(),
@@ -1026,6 +1026,24 @@ mod language_tests {
     }
 
     #[test]
+    fn cards_keep_source_provenance_out_of_visible_footer() {
+        let frame=RgbaImage::from_pixel(160,90,Rgba([20,40,60,255]));
+        for language in ["vi","en"] {for kind in ["frame","fact","stat","comparison"] {
+            let mut item=EvidenceItem{kind:kind.into(),label:"Evidence".into(),source_id:"src_1".into(),
+                source_time_ms:12345,second_time_ms:Some(23456),..Default::default()};
+            let second=(kind=="comparison").then_some(&frame);
+            let expected=card(&item,&frame,second,language).unwrap().0;
+            item.source_id="INTERNAL_SOURCE_ID_MUST_NOT_APPEAR".into();
+            item.proof.confirmed=true;
+            if kind!="comparison" {item.source_time_ms=98765;}
+            let actual=card(&item,&frame,second,language).unwrap().0;
+            assert_eq!(expected.as_raw(),actual.as_raw(),"Provenance leaked into {kind}/{language} card");
+            assert!(actual.enumerate_pixels().filter(|(x,y,_)|*x>=24&&*x<775&&*y>=actual.height()-26&&*y<actual.height()-10)
+                .all(|(_,_,p)|p.0==[255,255,255,255]),"Footer must be blank for {kind}/{language}");
+        }}
+    }
+
+    #[test]
     fn stacked_cards_keep_earlier_images_until_scene_end() {
         for duration in [1000,15000,90000] {for count in 1..=8 {
             let seg=Segment{duration_ms:duration,..Default::default()};
@@ -1245,20 +1263,8 @@ fn card(
     } else {
         paste(&mut img, first, [20, 82, 760, photo_height])
     };
-    text(
-        &mut img,
-        &f,
-        &format!("{} · {}{}", item.source_id, time(item.source_time_ms),
-            if matches!(item.kind.as_str(), "stat" | "fact") && !item.proof.confirmed {
-                crate::content_language::text(language," · CẦN ĐỐI CHIẾU"," · VERIFY WITH SOURCE")
-            }else{""}),
-        24.,
-        height as f32-26.,
-        750.,
-        16.,
-        1,
-        [80, 90, 100, 255],
-    );
+    // Source IDs, timestamps and proof status stay in project data / sources.json.
+    // Do not burn the internal provenance footer into preview/export cards.
     for a in &item.annotations {
         let point = |v: [f32; 2]| [rect[0] + v[0] * rect[2], rect[1] + v[1] * rect[3]];
         let from = point(a.from);

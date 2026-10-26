@@ -737,6 +737,9 @@ fn receipt_key(p: &Project) -> String {
             &p.evidence_settings,
             &p.card_sound,
             &p.export_metadata,
+            &p.music,&p.effects,
+            crate::visual_effects::fingerprint(&p.music.file),
+            p.effects.layers.values().chain(std::iter::once(&p.effects.footage)).map(|e|crate::visual_effects::fingerprint(Path::new(&e.lut))).collect::<Vec<_>>(),
         ))
         .unwrap_or_default(),
     )

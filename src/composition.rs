@@ -84,7 +84,7 @@ impl LayerClip {
     pub fn tempo(&self)->String {if (self.playback_rate-1.).abs()<0.000001 {"anull".into()}else{format!("atempo={:.9}",self.playback_rate)}}
     pub fn active(&self,ms:u64)->bool { self.start_ms<=ms && ms<self.end() }
     pub fn end(&self)->u64 { self.start_ms.saturating_add(self.duration_ms) }
-    pub fn audio(&self)->bool { matches!(self.track,timeline::VOICE|timeline::ORIGINAL|timeline::SFX) }
+    pub fn audio(&self)->bool { matches!(self.track,timeline::VOICE|timeline::ORIGINAL|timeline::SFX|timeline::MUSIC) }
     pub fn background_original(&self,p:&Project)->bool {
         self.track==timeline::ORIGINAL && p.segments.iter().any(|s|s.id==self.scene_id&&s.kind=="review")
     }
@@ -138,7 +138,7 @@ impl Composition {
                             transform.x=(1.-transform.width)*p.output.x+transform.width/2.;
                             transform.y=(1.-transform.height)*p.output.y+transform.height/2.;
                         }
-                        (Some(src.path.clone()),Some(src.proxy.clone()),s.in_ms)
+                        (Some(src.input_path().to_owned()),Some(src.proxy.clone()),s.in_ms)
                         }
                     },
                     timeline::AVATAR => {
@@ -220,6 +220,7 @@ impl Composition {
             expanded.push(clip);
         }
         result.clips=expanded;
+        if let Some(music)=crate::background_music::clip(p){result.clips.push(music);}
         p.layer_defaults.apply(p, &mut result);
         if !p.layer_defaults.free_aspect {for c in result.clips.iter_mut().filter(|c|matches!(c.track,timeline::AVATAR|timeline::EVIDENCE|timeline::ANNOTATION)) {
             if c.track==timeline::AVATAR {
@@ -340,7 +341,7 @@ impl Project {
                 let start=if command=="paste"{cursor}else{selected.end()};
                 let group=if copies.len()>1{Some(uuid::Uuid::new_v4().to_string())}else{None};
                 for (i,mut c) in copies.into_iter().enumerate(){
-                    c.id=uuid::Uuid::new_v4().to_string();c.group=group.clone();c.timing_manual=true;
+                    let effect=self.effects.layers.get(&c.id).cloned();c.id=uuid::Uuid::new_v4().to_string();if let Some(effect)=effect{self.effects.layers.insert(c.id.clone(),effect);}c.group=group.clone();c.timing_manual=true;
                     c.start_ms=(start as i128+c.start_ms as i128-origin as i128).max(0) as u64;
                     if i==0{next=Some(c.id.clone());}comp.clips.push(c);
                 }
@@ -350,7 +351,7 @@ impl Project {
                 let group=if targets.len()>1{Some(uuid::Uuid::new_v4().to_string())}else{None};
                 for c in targets {
                     let from=c.start_ms.max(cursor);let end=c.end();
-                    if from<end {let mut right=c.clone();right.id=uuid::Uuid::new_v4().to_string();right.group=group.clone();right.start_ms=from;right.duration_ms=end-from;right.media_in_ms=c.source_at(from-c.start_ms);right.cue_in_ms+=from-c.start_ms;right.timing_manual=true;
+                    if from<end {let mut right=c.clone();right.id=uuid::Uuid::new_v4().to_string();if let Some(effect)=self.effects.layers.get(&c.id).cloned(){self.effects.layers.insert(right.id.clone(),effect);}right.group=group.clone();right.start_ms=from;right.duration_ms=end-from;right.media_in_ms=c.source_at(from-c.start_ms);right.cue_in_ms+=from-c.start_ms;right.timing_manual=true;
                         if c.id==id {next=Some(right.id.clone());}comp.clips.push(right);
                     }
                     if c.start_ms<cursor {let left=comp.clips.iter_mut().find(|l|l.id==c.id).unwrap();left.duration_ms=left.duration_ms.min(cursor-c.start_ms);left.timing_manual=true;}
@@ -373,7 +374,7 @@ impl Project {
         self.composition.as_mut().unwrap().timing(id,start,trim,duration)
     }
     pub fn composition_snapshot(&self)->Composition {
-        if let Some(c)=&self.composition { if c.version==4&&c.script_key==Composition::key(self) {let mut c=c.clone();c.upgrade_host_aspect(self);return c;} }
+        if let Some(c)=&self.composition { if c.version==4&&c.script_key==Composition::key(self) {let mut c=c.clone();c.upgrade_host_aspect(self);Self::sync_music(&mut c,crate::background_music::clip(self));return c;} }
         Composition::from_project(self)
     }
     pub fn ensure_composition(&mut self) {
@@ -451,6 +452,16 @@ impl Project {
             Some((c.id.clone(),self.root.join(asset)))
         }).collect();
         if let Some(c)=&mut self.composition{for clip in &mut c.clips{if let Some((_,path))=media.iter().find(|(id,_)|id==&clip.id){clip.media=Some(path.clone());}}}
+        let music=crate::background_music::clip(self);
+        if let Some(comp)=&mut self.composition{Self::sync_music(comp,music);}
+    }
+    fn sync_music(comp:&mut Composition,music:Option<LayerClip>) {
+        let old=comp.clips.iter().find(|c|c.id=="music-bed").cloned();
+        comp.clips.retain(|c|c.id!="music-bed");
+        if let Some(mut music)=music.filter(|_|!comp.removed.iter().any(|id|id=="music-bed")) {
+            if let Some(old)=old {music.visible=old.visible;music.locked=old.locked;if old.timing_manual{music.start_ms=old.start_ms;music.duration_ms=old.duration_ms;music.media_in_ms=old.media_in_ms;music.timing_manual=true;}}
+            comp.clips.push(music);
+        }
     }
     pub fn composition_duration(&self)->u64 {self.composition_snapshot().duration_ms()}
 }

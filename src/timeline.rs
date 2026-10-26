@@ -14,10 +14,11 @@ pub const BACKGROUND:usize=6;
 pub const EVIDENCE:usize=7;
 pub const ANNOTATION:usize=8;
 pub const SFX:usize=9;
-pub const TRACK_COUNT:usize=10;
+pub const MUSIC:usize=10;
+pub const TRACK_COUNT:usize=11;
 #[derive(Clone,Copy,Debug)]
-pub enum TrackRole {Video,Avatar,Voice,Original,Captions,Graphics,Background,Evidence,Annotation,Sfx}
-pub const TRACK_ROLES:[TrackRole;TRACK_COUNT]=[TrackRole::Video,TrackRole::Avatar,TrackRole::Voice,TrackRole::Original,TrackRole::Captions,TrackRole::Graphics,TrackRole::Background,TrackRole::Evidence,TrackRole::Annotation,TrackRole::Sfx];
+pub enum TrackRole {Video,Avatar,Voice,Original,Captions,Graphics,Background,Evidence,Annotation,Sfx,Music}
+pub const TRACK_ROLES:[TrackRole;TRACK_COUNT]=[TrackRole::Video,TrackRole::Avatar,TrackRole::Voice,TrackRole::Original,TrackRole::Captions,TrackRole::Graphics,TrackRole::Background,TrackRole::Evidence,TrackRole::Annotation,TrackRole::Sfx,TrackRole::Music];
 impl TrackRole {pub fn z(self)->i32{match self{Self::Background=>0,Self::Video=>10,Self::Evidence=>15,Self::Annotation=>16,Self::Avatar=>20,Self::Graphics=>30,_=>40}}}
 pub const TRACK_NAMES: [&str; TRACK_COUNT] = [
     "Video",
@@ -30,6 +31,7 @@ pub const TRACK_NAMES: [&str; TRACK_COUNT] = [
     "Dẫn chứng",
     "Chú thích",
     "SFX thẻ",
+    "Nhạc nền",
 ];
 
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]

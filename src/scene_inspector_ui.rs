@@ -26,9 +26,6 @@ fn scene_card() -> egui::Frame {
 fn label(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).size(12.).color(MUTED));
 }
-fn section_title(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).size(13.).strong());
-}
 fn kind_label(value: &str) -> &str {
     match value {
         "host" => "Nhân vật toàn màn hình",
@@ -77,8 +74,8 @@ fn scene_actions(ui: &mut egui::Ui, enabled: bool, geo: &mut SceneGeometry) -> u
 
 fn source_card(ui: &mut egui::Ui, s: &mut Segment, sources: &[Source], geo: &mut SceneGeometry) {
     let card = scene_card().show(ui, |ui| {
-        ui.set_min_height(184.);
-        section_title(ui, "Nguồn & thời gian");
+        settings_group(ui, "scene_source", "Nguồn & thời gian", true, |ui| {
+        ui.set_min_height(190.);
         let field_width = (ui.available_width() - 62.).max(100.);
         egui::Grid::new("scene_source_fields")
             .num_columns(2)
@@ -179,26 +176,16 @@ fn source_card(ui: &mut egui::Ui, s: &mut Segment, sources: &[Source], geo: &mut
             label(ui, "Hiển thị nhân vật và đọc lời thoại.");
             label(ui, "Thời lượng được khớp theo giọng đã tạo.");
         }
+        });
     });
     geo.record("scene_source_card", card.response.rect);
 }
 
 fn narration_card(ui: &mut egui::Ui, s: &mut Segment, geo: &mut SceneGeometry) {
     let card = scene_card().show(ui, |ui| {
-        ui.set_min_height(184.);
-        ui.horizontal(|ui| {
-            section_title(ui, "Lời thoại");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                label(
-                    ui,
-                    if s.kind == "source" {
-                        "Tiếng gốc"
-                    } else {
-                        "Giọng VieNeu"
-                    },
-                );
-            });
-        });
+        settings_group(ui, "scene_narration", "Lời thoại", true, |ui| {
+        ui.set_min_height(190.);
+        label(ui, if s.kind == "source" {"Tiếng gốc"} else {"Giọng VieNeu"});
         ui.add_enabled_ui(s.kind != "source", |ui| {
             egui::ScrollArea::vertical()
                 .id_salt("scene_narration_scroll")
@@ -233,6 +220,7 @@ fn narration_card(ui: &mut egui::Ui, s: &mut Segment, geo: &mut SceneGeometry) {
                 ),
             );
         }
+        });
     });
     geo.record("scene_narration_card", card.response.rect);
 }

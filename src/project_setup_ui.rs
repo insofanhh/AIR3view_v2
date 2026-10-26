@@ -5,6 +5,27 @@ use crate::workflow::{JobState, Phase, Status};
 fn muted(ui: &mut egui::Ui, text: impl Into<String>) {
     ui.label(RichText::new(text.into()).size(12.).color(MUTED));
 }
+// Stable IDs keep each subgroup independent while switching tabs or scenes.
+pub(super) fn settings_group(
+    ui: &mut egui::Ui,
+    id: &str,
+    title: &str,
+    default_open: bool,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    let focus = std::env::args().any(|arg| arg == format!("--settings-group={id}"));
+    let _response = egui::CollapsingHeader::new(title)
+        .id_salt(id)
+        .default_open(default_open || focus)
+        .show(ui, body);
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        data.insert_temp(egui::Id::new(("settings_group", id)), _response.header_response.rect);
+    });
+    if focus && std::env::args().any(|arg| arg.starts_with("--capture-ui=")) {
+        ui.scroll_to_rect(_response.header_response.rect, Some(egui::Align::Min));
+    }
+}
 fn section(
     ui: &mut egui::Ui,
     id: &str,
@@ -69,8 +90,7 @@ impl StudioApp {
             }
         }
     }
-    pub(super) fn original_audio_settings(&mut self,ui:&mut egui::Ui) {
-        heading(ui,"ÂM THANH VIDEO GỐC");
+    pub(super) fn original_audio_controls(&mut self,ui:&mut egui::Ui) {
         let o=&mut self.project.output;
         let enabled=ui.checkbox(&mut o.original_audio_enabled,"Bật tiếng gốc làm nền khi review");
         #[cfg(test)] self.hitboxes.insert("original_audio_enabled".into(),enabled.rect);
@@ -237,6 +257,7 @@ impl StudioApp {
             if r.intercuts_enabled {r.intercut_count}else{0}
         );
         section(ui, "setup_script", "01 / Kịch bản", summary, |ui| {
+            settings_group(ui, "script_basics", "Độ dài & ngôn ngữ", true, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label("Độ dài");
                 let response = ui.add(
@@ -269,6 +290,8 @@ impl StudioApp {
             if crate::content_language::prompt_conflict(&self.project.rules.language, &self.project.rules.prompt) {
                 ui.colored_label(egui::Color32::YELLOW, "Prompt có yêu cầu ngôn ngữ khác. AI sẽ ưu tiên Ngôn ngữ lời review đã chọn.");
             }
+            });
+            settings_group(ui, "script_prompt", "Prompt & phong cách", false, |ui| {
             ui.label("Prompt / phong cách / yêu cầu riêng");
             ui.add(
                 egui::TextEdit::multiline(&mut self.project.rules.prompt)
@@ -279,8 +302,9 @@ impl StudioApp {
                 self.project.rules.prompt = DEFAULT_REACTION_PROMPT.into();
             }
             prompt_duration_hint(ui, &self.project.rules);
-            hook_settings(ui, &mut self.project.rules);
-            egui::CollapsingHeader::new("Cảnh ưu tiên / cảnh loại bỏ").show(ui, |ui| {
+            });
+            settings_group(ui, "script_hook", "Hook & cảnh gốc xen kẽ", false, |ui| hook_settings(ui, &mut self.project.rules));
+            settings_group(ui, "script_scene_rules", "Cảnh ưu tiên / cảnh loại bỏ", false, |ui| {
                 field(ui, "Ưu tiên lấy cảnh", &mut self.project.rules.include);
                 field(ui, "Loại bỏ cảnh", &mut self.project.rules.exclude);
                 muted(
@@ -310,7 +334,12 @@ impl StudioApp {
             "setup_image",
             "02 / Hình ảnh đầu ra",
             summary,
-            |ui| {self.output_settings(ui);ui.separator();self.evidence_settings_ui(ui);},
+            |ui| {
+                self.output_settings(ui);
+                self.footage_effects_ui(ui);
+                let _evidence=egui::CollapsingHeader::new("Dẫn chứng cho host").id_salt("output_evidence").show(ui,|ui|self.evidence_settings_controls(ui));
+                #[cfg(test)] self.hitboxes.insert("output_evidence_header".into(),_evidence.header_response.rect);
+            },
         );
     }
     fn setup_subtitles(&mut self, ui: &mut egui::Ui) {
@@ -330,6 +359,7 @@ impl StudioApp {
         };
         section(ui, "setup_subtitles", "04 / Phụ đề", summary, |ui| {
             self.subtitle_settings(ui);
+            settings_group(ui, "subtitle_sample", "Mẫu màu phụ đề", false, |ui| {
             let s = &self.project.subtitles;
             egui::Frame::new()
                 .fill(Color32::from_rgb(8, 12, 20))
@@ -357,6 +387,7 @@ impl StudioApp {
                 ui,
                 "Mẫu màu minh họa; preview dựng cảnh dùng đúng font, cỡ và viền đã chọn.",
             );
+            });
         });
     }
     fn setup_production(&mut self, ui: &mut egui::Ui) {
@@ -392,9 +423,8 @@ impl StudioApp {
             "03 / Giọng, nhân vật & âm thanh",
             summary,
             |ui| {
-                self.original_audio_settings(ui);
-                ui.separator();
                 let p = self.project.production.as_mut().unwrap();
+                settings_group(ui, "production_voice", "Giọng VieNeu & giọng tham chiếu", false, |ui| {
                 field(ui, "Giọng preset VieNeu", &mut p.voice);
                 ui.checkbox(
                     &mut p.voice_reference_enabled,
@@ -450,7 +480,8 @@ impl StudioApp {
                     ui,
                     "VieNeu v3 dùng tối đa 8 giây đầu; không cần nhập lời mẫu.",
                 );
-                ui.separator();
+                });
+                settings_group(ui, "production_avatar", "Nhân vật review / reaction", false, |ui| {
                 ui.checkbox(&mut p.avatar_enabled, "Tạo nhân vật review / reaction");
                 ui.add_enabled_ui(p.avatar_enabled, |ui| {
                     egui::ComboBox::from_id_salt("project_avatar_provider")
@@ -565,7 +596,13 @@ impl StudioApp {
                         }
                     }
                 });
-                ui.checkbox(&mut p.align_subtitles, "Tự căn từ phụ đề bằng Whisper");
+                });
+                settings_group(ui, "production_alignment", "Căn từ phụ đề / Whisper", false, |ui| {
+                    ui.checkbox(&mut p.align_subtitles, "Tự căn từ phụ đề bằng Whisper");
+                    muted(ui, "Căn thời điểm từng từ theo giọng đã tạo để đồng bộ phụ đề và highlight.");
+                });
+                settings_group(ui, "production_original_audio", "Âm thanh video gốc", false, |ui| self.original_audio_controls(ui));
+                self.music_settings_ui(ui);
                 muted(
                     ui,
                     "Các lựa chọn được lưu riêng trong dự án và kế thừa cho dự án mới.",
@@ -589,8 +626,9 @@ impl StudioApp {
             let edit=ui.add(egui::TextEdit::multiline(&mut self.urls).desired_width(f32::INFINITY).desired_rows(2).hint_text("URL YouTube, mỗi dòng một video"));
             #[cfg(test)] self.hitboxes.insert("setup_urls".into(),edit.rect);
             if edit.changed(){self.project.input_urls=self.urls.clone();}
-            if self.batch_view.prefs.enabled{self.batch_options_ui(ui);self.batch_sources_ui(ui);return;}
+            if self.batch_view.prefs.enabled{self.normalization_ui(ui);self.batch_options_ui(ui);self.batch_sources_ui(ui);return;}
             if ui.button("+ Video từ máy…").clicked(){self.import_dialog();}
+            self.normalization_ui(ui);
             match self.planned_sources() {
                 Err(e)=>{ui.colored_label(Color32::LIGHT_RED,format!("{e:#}"));}
                 Ok(sources)=>{

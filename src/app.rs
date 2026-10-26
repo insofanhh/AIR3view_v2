@@ -35,6 +35,9 @@ mod navigation_ui;
 mod scene_inspector_ui;
 #[path = "project_setup_ui.rs"]
 mod project_setup_ui;
+use project_setup_ui::settings_group;
+#[path = "media_settings_ui.rs"]
+mod media_settings_ui;
 #[path = "layer_ui.rs"]
 mod layer_ui;
 #[path="evidence_ui.rs"]
@@ -55,6 +58,9 @@ enum Page {
     Settings,
 }
 enum Task {
+    Normalize,
+    LutImport(PathBuf,Option<String>),
+    MusicImport(PathBuf),
     Automatic { resume: bool },
     Prepare,
     Assets,
@@ -269,7 +275,7 @@ impl StudioApp {
             settings,
             page,
             selected,
-            inspector: if std::env::args().any(|a|a=="--inspector=evidence"){3}else if std::env::args().any(|a| a == "--inspector=output") { 1 } else { 0 },
+            inspector: if std::env::args().any(|a|a=="--inspector=evidence"){3}else if std::env::args().any(|a| a == "--inspector=output") { 1 } else if std::env::args().any(|a|a=="--inspector=subtitles"){2}else { 0 },
             urls,
             setup_open,
             auto_running: false,
@@ -638,6 +644,23 @@ impl StudioApp {
         thread::spawn(move || {
             let result = (|| -> anyhow::Result<Project> {
                 match task {
+                    Task::Normalize=>{
+                        let mut p=p;
+                        for source in &mut p.sources{crate::source_normalization::prepare(&p.normalization,&s,source,&p.root,&cancel)?;}
+                        if let Some(comp)=&mut p.composition{for c in &mut comp.clips{if matches!(c.track,crate::timeline::VIDEO|crate::timeline::ORIGINAL|crate::timeline::BACKGROUND)&&!c.still(){if let Some(source)=p.segments.iter().find(|seg|seg.id==c.scene_id).and_then(|seg|p.sources.iter().find(|src|src.id==seg.source_id)){c.media=Some(source.input_path().to_owned());c.proxy=Some(source.proxy.clone());}}}}
+                        p.rendered=None;p.save()?;Ok(p)
+                    },
+                    Task::LutImport(path,layer)=>{
+                        let mut p=p;let folder=p.root.parent().unwrap_or(&p.root).parent().unwrap_or(&p.root).join("assets/luts");
+                        let path=crate::visual_effects::import(&path,&folder)?;
+                        let e=if let Some(id)=layer{p.effects.layers.entry(id).or_default()}else{&mut p.effects.footage};
+                        e.lut=path.to_string_lossy().into_owned();p.rendered=None;p.save()?;Ok(p)
+                    },
+                    Task::MusicImport(path)=>{
+                        let mut p=p;let folder=p.root.parent().unwrap_or(&p.root).parent().unwrap_or(&p.root).join("assets/music");
+                        p.music.file=crate::background_music::import(&s,&path,&folder,&cancel)?;p.music.name=path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                        p.music.enabled=true;if let Some(comp)=&mut p.composition{comp.removed.retain(|id|id!="music-bed");}p.rendered=None;p.ensure_composition();p.save()?;Ok(p)
+                    },
                     Task::Automatic { resume } => crate::workflow::run(p,s,tx.clone(),cancel,resume),
                     Task::Prepare => pipeline::prepare(p, s, tx.clone(), cancel),
                     Task::Assets => pipeline::generate_assets(p, s, tx.clone(), cancel),
@@ -652,8 +675,7 @@ impl StudioApp {
                         while p.sources.iter().any(|s|s.id==format!("src_{next}")){next+=1;}
                         let id = format!("src_{next}");
                         let mut source = media::import_local(&s, &path, id.clone(), &cancel)?;
-                        source.proxy =
-                            media::proxy(&s, &source, &p.root.join("cache/proxy"), &cancel)?;
+                        crate::source_normalization::prepare(&p.normalization,&s,&mut source,&p.root,&cancel)?;
                         if p.segments.is_empty() {
                             let dur = source.duration_ms.min(10000);
                             p.segments.push(Segment {
@@ -1153,9 +1175,7 @@ impl StudioApp {
     }
     fn output_settings(&mut self, ui: &mut egui::Ui) {
         self.footage_speed_settings(ui);
-        ui.separator();
-        self.original_audio_settings(ui);
-        ui.separator();
+        settings_group(ui, "output_original_audio", "Âm thanh video gốc", false, |ui| self.original_audio_controls(ui));
         let old_output=self.project.output.clone();
         let before = serde_json::to_string(&self.project.output).unwrap();
         let duration_before = (
@@ -1164,7 +1184,7 @@ impl StudioApp {
             self.project.rules.hook_enabled,
         );
         let o = &mut self.project.output;
-        heading(ui, "KHUNG VIDEO ĐẦU RA");
+        let _frame_header=egui::CollapsingHeader::new("Khung video đầu ra").id_salt("output_frame").default_open(!self.setup_open).show(ui,|ui|{
         ui.checkbox(&mut o.editorial, "Nền sáng / thẻ thông tin theo mẫu");
         ui.checkbox(&mut o.blur_background, "Nền video mờ (theo clip gốc)");
         if ui.button("Áp dụng bố cục review mẫu").clicked() {
@@ -1195,8 +1215,9 @@ impl StudioApp {
         ui.add(egui::Slider::new(&mut o.scale, 0.2..=3.0).text("Scale"));
         ui.add(egui::Slider::new(&mut o.x, 0.0..=1.0).text("Vị trí X"));
         ui.add(egui::Slider::new(&mut o.y, 0.0..=1.0).text("Vị trí Y"));
-        ui.add_space(12.0);
-        heading(ui, "NHÂN VẬT Ở GÓC MÀN HÌNH");
+        });
+        #[cfg(test)] self.hitboxes.insert("output_frame_header".into(),_frame_header.header_response.rect);
+        let _avatar_header=egui::CollapsingHeader::new("Nhân vật ở góc màn hình").id_salt("output_avatar").default_open(!self.setup_open).show(ui,|ui|{
         let size = ui.add(egui::Slider::new(&mut o.avatar_scale, 0.1..=0.8).text("Kích thước")
             .custom_formatter(|n, _| format!("{:.0}%", n * 100.0))
             .custom_parser(|s| s.trim_end_matches('%').trim().parse::<f64>().ok().map(|n| n / 100.0)));
@@ -1207,16 +1228,17 @@ impl StudioApp {
         let aw=o.avatar_scale*w as f32;let ah=aw;
         let mut x=(w as f32-aw)*(o.avatar_x-0.5);
         let mut y=(h as f32-ah)*(o.avatar_y-0.5);
-        ui.horizontal(|ui|{
+        ui.horizontal_wrapped(|ui|{
             ui.label("X");ui.add(egui::DragValue::new(&mut x).range(-10000.0..=10000.0).suffix(" px"));
             ui.label("Y");ui.add(egui::DragValue::new(&mut y).range(-10000.0..=10000.0).suffix(" px"));
         });
         o.avatar_x=0.5+x/(w as f32-aw).max(1.);
         o.avatar_y=0.5+y/(h as f32-ah).max(1.);
+        });
+        #[cfg(test)] self.hitboxes.insert("output_avatar_header".into(),_avatar_header.header_response.rect);
         if !self.setup_open {
-        ui.add_space(12.0);
-        heading(ui, "THỜI LƯỢNG MỤC TIÊU");
-        ui.horizontal(|ui| {
+        settings_group(ui, "output_duration", "Thời lượng mục tiêu & hook", false, |ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.add(
                 egui::DragValue::new(&mut self.project.rules.min_seconds)
                     .range(1..=7200)
@@ -1235,6 +1257,7 @@ impl StudioApp {
                 .size(12.0),
         );
         hook_settings(ui, &mut self.project.rules);
+        });
         }
         if before != serde_json::to_string(&self.project.output).unwrap() {
             let fresh=crate::composition::Composition::from_project(&self.project);
@@ -1269,18 +1292,20 @@ impl StudioApp {
         if self.page == Page::Editor && !self.setup_open {
             let enabled = crate::timeline::editable(&self.project,self.selected).is_ok();
             if let Some(seg) = self.project.segments.get_mut(self.selected) {
-                heading(ui,"CHỮ CỦA CẢNH CHỌN");
+                let mut changed = false;
+                settings_group(ui, "subtitle_scene_text", "Chữ của cảnh đang chọn", true, |ui| {
                 if ui.add_enabled(enabled,egui::TextEdit::multiline(&mut seg.caption).desired_width(f32::INFINITY).desired_rows(3).hint_text("Để trống để dùng lời thoại")).changed() {
                     seg.words.clear();seg.timing_estimated=true;seg.suppress_captions=false;
-                    self.touch();
+                    changed = true;
                 }
-                ui.separator();
+                });
+                if changed {self.touch();}
             }
         }
         let before = serde_json::to_string(&self.project.subtitles).unwrap();
         let s = &mut self.project.subtitles;
-        heading(ui, "PHỤ ĐỀ ĐẦU RA");
         ui.checkbox(&mut s.enabled, "Burn-in phụ đề");
+        settings_group(ui, "subtitle_position", "Vị trí phụ đề · X / Y", false, |ui| {
         ui.label("Vị trí sub · dịch chuyển theo pixel đầu ra");
         ui.scope(|ui| {
             ui.spacing_mut().slider_width=(ui.available_width()-95.).clamp(60.,180.);
@@ -1295,9 +1320,16 @@ impl StudioApp {
             if reset.clicked(){s.offset_x=0;s.offset_y=0;}
         });
         ui.label(RichText::new("X dương: sang phải · Y dương: xuống dưới · 0: vị trí gốc theo Cách đáy.").size(12.).color(MUTED));
-        ui.separator();
+        ui.add(egui::Slider::new(&mut s.bottom_margin, 20..=400).text("Cách đáy"));
+        });
+        settings_group(ui, "subtitle_font", "Font, cỡ chữ & xuống dòng", false, |ui| {
+        ui.spacing_mut().slider_width=(ui.available_width()-110.).clamp(45.,150.);
         field(ui, "Font", &mut s.font);
         ui.add(egui::Slider::new(&mut s.size, 16.0..=100.0).text("Cỡ chữ"));
+        ui.add(egui::Slider::new(&mut s.words_per_line, 2..=10).text("Từ / dòng"));
+        });
+        settings_group(ui, "subtitle_colors", "Màu sắc, viền & highlight", false, |ui| {
+        ui.spacing_mut().slider_width=(ui.available_width()-110.).clamp(45.,150.);
         ui.horizontal(|ui| {
             ui.label("Màu chữ");
             ui.color_edit_button_srgb(&mut s.color);
@@ -1311,16 +1343,16 @@ impl StudioApp {
             ui.color_edit_button_srgb(&mut s.outline);
         });
         ui.add(egui::Slider::new(&mut s.outline_width, 0.0..=8.0).text("Độ dày viền"));
-        ui.add(egui::Slider::new(&mut s.bottom_margin, 20..=400).text("Cách đáy"));
-        ui.add(egui::Slider::new(&mut s.words_per_line, 2..=10).text("Từ / dòng"));
         ui.checkbox(&mut s.karaoke, "Highlight theo từ");
+        });
         ui.label(RichText::new("Preview nhanh hiển thị bố cục. Dựng preview cảnh để kiểm tra font, viền và highlight đúng như export.").size(12.0).color(MUTED));
         if before != serde_json::to_string(&self.project.subtitles).unwrap() {
             self.touch();
         }
-        ui.separator();
-        if !self.setup_open && ui.button("Căn từ bằng Whisper").clicked() {
-            self.launch(Task::Transcribe);
+        if !self.setup_open {
+            settings_group(ui, "subtitle_alignment", "Căn thời điểm phụ đề / Whisper", false, |ui| {
+                if ui.button("Căn từ bằng Whisper").clicked() {self.launch(Task::Transcribe);}
+            });
         }
     }
     fn range_rules(&mut self, ui: &mut egui::Ui) {
@@ -2521,9 +2553,16 @@ mod ui_tests {
         for width in [240.,320.,560.] {
             let ctx=egui::Context::default();let mut app=StudioApp::from_context(&ctx);
             app.capture_path=None;app.project=Project::default();app.setup_open=true;
+            ctx.style_mut(|style|style.animation_time=0.);
             let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width+24.,1200.));
             let draw=|app:&mut StudioApp,events| {let _=ctx.run(egui::RawInput{screen_rect:Some(screen),events,..Default::default()},|ctx|{egui::CentralPanel::default().show(ctx,|ui|app.subtitle_settings(ui));});};
             draw(&mut app,vec![]);draw(&mut app,vec![]);
+            let header:Rect=ctx.data(|d|d.get_temp(egui::Id::new(("settings_group","subtitle_position"))).unwrap());
+            let pos=header.center();
+            let before=serde_json::to_vec(&app.project.subtitles).unwrap();
+            draw(&mut app,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:true,modifiers:egui::Modifiers::NONE},egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:false,modifiers:egui::Modifiers::NONE}]);
+            draw(&mut app,vec![]);
+            assert_eq!(before,serde_json::to_vec(&app.project.subtitles).unwrap(),"Expanding settings changed subtitle values");
             let x=app.hitboxes["subtitle_x"];let y=app.hitboxes["subtitle_y"];let reset=app.hitboxes["subtitle_position_reset"];
             assert!(screen.contains_rect(x)&&screen.contains_rect(y)&&screen.contains_rect(reset),"Subtitle position clipped at {width}");assert!(!x.intersects(y)&&!y.intersects(reset));
             for rect in [x,y] {
@@ -2544,7 +2583,7 @@ mod ui_tests {
             app.capture_path=None;app.project=Project::default();
             app.project.segments=vec![Segment{id:"s".into(),kind:"review".into(),audio:Some("keep.wav".into()),asset_key:"keep-voice".into(),..Default::default()}];
             let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width+24.,720.));
-            let draw=|app:&mut StudioApp,events| {let _=ctx.run(egui::RawInput{screen_rect:Some(screen),events,..Default::default()},|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.original_audio_settings(ui);});});};
+            let draw=|app:&mut StudioApp,events| {let _=ctx.run(egui::RawInput{screen_rect:Some(screen),events,..Default::default()},|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.original_audio_controls(ui);});});};
             draw(&mut app,vec![]);draw(&mut app,vec![]);
             let toggle=app.hitboxes["original_audio_enabled"];let slider=app.hitboxes["original_audio_gain"];
             assert!(screen.contains_rect(toggle)&&screen.contains_rect(slider),"Audio controls clipped at {width}");assert!(!toggle.intersects(slider));
@@ -2677,6 +2716,7 @@ mod ui_tests {
         assert!(app.project.sources.is_empty() && app.project.rules.required_ranges.is_empty());
         assert!(ProjectDefaults::load(&temp.path().join("project-defaults.json")).is_some());
         // Exercise the real output controls without depending on scroll position.
+        app.setup_open=false;
         for _ in 0..2 {
             let _ = ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 950.0))), ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| app.output_settings(ui));

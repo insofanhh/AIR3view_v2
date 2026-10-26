@@ -57,16 +57,17 @@ fn filter_path(path:&Path)->String {
 pub fn visual_input(p:&Project,c:&LayerClip,local:u64,w:u32,h:u32,fps:u32,proxy:bool)->Result<(Vec<String>,String)> {
     let start=c.source_at(local) as f64/1000.;
     let pts=c.pts();
+    let effects=crate::visual_effects::filters(p,c)?;
     if let Some(media)=&c.media {
         let file=if proxy {c.proxy.as_ref().filter(|p|p.is_file()).unwrap_or(media)} else {media};
         let args=if c.still(){vec!["-loop".into(),"1".into(),"-framerate".into(),fps.to_string(),"-i".into(),file.to_string_lossy().into_owned()]}else{vec!["-ss".into(),format!("{start:.6}"),"-t".into(),format!("{:.6}",c.source_duration(c.duration_ms.saturating_sub(local)) as f64/1000.),"-i".into(),file.to_string_lossy().into_owned()]};
         let filter=if c.track==BACKGROUND&&!c.still() {
             let bw=(w/4).max(2);let bh=(h/4).max(2);
             let sigma=(12.*w as f32/p.output.dimensions().0 as f32).max(0.1);
-            format!("{pts},scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},gblur=sigma={sigma:.5},eq=brightness=-0.12,scale={w}:{h},setsar=1,fps={fps},format=rgba")
+            format!("{pts}{effects},scale={bw}:{bh}:force_original_aspect_ratio=increase,crop={bw}:{bh},gblur=sigma={sigma:.5},eq=brightness=-0.12,scale={w}:{h},setsar=1,fps={fps},format=rgba")
         } else {
             // Preserve aspect ratio; the compositor applies the saved geometry.
-            format!("{pts},scale={w}:{h}:force_original_aspect_ratio=decrease,setsar=1,fps={fps},format=rgba")
+            format!("{pts}{effects},scale={w}:{h}:force_original_aspect_ratio=decrease,setsar=1,fps={fps},format=rgba")
         };
         Ok((args,filter))
     } else {
@@ -130,7 +131,8 @@ pub fn export_with_progress<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:
 pub(crate) fn validate_assets(p:&Project)->Result<()> {
     let composition=p.composition_snapshot();composition.validate()?;
     crate::evidence::validate(p)?;
-    for c in composition.clips.iter().filter(|c|c.enabled(p)) {
+    p.music.validate()?;
+    for c in composition.clips.iter().filter(|c|c.enabled(p)&&c.track!=timeline::MUSIC) {
         if let Some(media)=&c.media {anyhow::ensure!(media.is_file(),"Thiếu media của layer '{}': {}",c.id,media.display());}
     }
     for seg in p.segments.iter().filter(|_|p.evidence_settings.enabled){for item in seg.evidence_items.iter().filter(|e|e.enabled){
@@ -143,6 +145,7 @@ pub(crate) fn validate_assets(p:&Project)->Result<()> {
 }
 
 fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,progress:&mut F,report:&mut RenderReport)->Result<()> {
+    crate::background_music::prepare(p,s,cancel)?;
     p.card_sound.validate()?;
     let metadata=crate::export_metadata::prepare(p,s)?;
     validate_assets(p)?;
@@ -186,7 +189,8 @@ fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel
         let identities:Vec<_>=clips.iter().filter_map(|c|c.media.as_ref()).map(|path|{
             let m=fs::metadata(path).ok();(path,m.as_ref().map(|m|m.len()),m.and_then(|m|m.modified().ok()))
         }).collect();
-        let key=crate::media::hash(serde_json::to_vec(&(clips.clone(),scenes,identities,visual_output(p),&p.subtitles,&s.encoder,frames,RENDERER)).unwrap_or_default());
+        let effects:Vec<_>=clips.iter().map(|c|crate::visual_effects::identity(p,c)).collect();
+        let key=crate::media::hash(serde_json::to_vec(&(clips.clone(),scenes,identities,effects,visual_output(p),&p.subtitles,&s.encoder,frames,RENDERER)).unwrap_or_default());
         part.composition=Some(Composition{version:4,script_key:Composition::key(p),clips,removed:vec![]});
         let path=folder.join(format!("{key}.mp4"));
         let receipt=path.with_extension("json");
@@ -264,7 +268,7 @@ fn export_interval(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,end:u64,fr
             };
             // Raster at the saved layer size, rather than enlarging every
             // small card/avatar to the canvas and immediately shrinking it.
-            (input,format!("{},scale={tw}:{th},setsar=1,fps={fps},format=rgba",clip.pts()))
+            (input,format!("{}{},scale={tw}:{th},setsar=1,fps={fps},format=rgba",clip.pts(),crate::visual_effects::filters(p,clip)?))
         }else{
             // ASS must still be shaped at full output size; blurred video
             // backgrounds retain their original fill/crop/blur semantics.

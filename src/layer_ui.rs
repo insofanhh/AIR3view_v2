@@ -196,8 +196,10 @@ impl StudioApp {
                 ui.label(RichText::new(format!("Đồng bộ {count} layer {} có thể chỉnh sửa",composition::name(c.track))).size(12.).color(MUTED));
             }
             if !c.audio() {
-
-                let position_changed=ui.horizontal(|ui|{
+                self.layer_effects_ui(ui,&c);
+                settings_group(ui, "layer_transform", "Vị trí, kích thước & hiển thị", true, |ui| {
+                ui.spacing_mut().slider_width=(ui.available_width()-115.).clamp(40.,150.);
+                let position_changed=ui.horizontal_wrapped(|ui|{
                     ui.label("X");let rx=ui.add(egui::DragValue::new(&mut x).speed(1.).range(-10000.0..=10000.0).suffix(" px"));
                     ui.label("Y");let ry=ui.add(egui::DragValue::new(&mut y).speed(1.).range(-10000.0..=10000.0).suffix(" px"));
                     #[cfg(test)] {self.hitboxes.insert("layer_x".into(),rx.rect);self.hitboxes.insert("layer_y".into(),ry.rect);self.hitboxes.insert("layer_inspector_clip".into(),ui.clip_rect());}
@@ -221,8 +223,10 @@ impl StudioApp {
                     if ui.button("Reset").clicked(){let mut factory=self.project.clone();factory.layer_defaults=Default::default();if let Some(base)=composition::Composition::from_project(&factory).clips.iter().find(|v|v.id==id){t=base.transform.clone();}}
                     if c.track==crate::timeline::AVATAR && ui.button("Đúng tỉ lệ gốc").on_hover_text("Fit nhân vật trong vùng hiện tại, giữ vị trí và góc xoay").clicked(){t.contain_aspect(composition::avatar_aspect(c.media.as_deref()),w,h);}
                 });
+                });
             }
             let mut linked=c.linked;let mut gain=c.gain;let mut z=c.z;let mut fi=c.fade_in_ms;let mut fo=c.fade_out_ms;
+            settings_group(ui, "layer_link_audio", if c.audio(){"Âm lượng, fade & liên kết"}else{"Thứ tự & liên kết layer"}, false, |ui| {
             ui.checkbox(&mut linked,"Liên kết timing với cảnh");
             if c.evidence_id.is_some(){
                 let label=if c.group.is_some(){"Bỏ nhóm ảnh / chú thích"}else{"Nhóm ảnh / chú thích"};
@@ -236,14 +240,16 @@ impl StudioApp {
                 }
             }
             if c.audio(){
-                ui.add(egui::Slider::new(&mut gain,0.0..=2.).text("Âm lượng"));
+                ui.add(egui::Slider::new(&mut gain,0.0..=if c.track==crate::timeline::MUSIC{1.}else{2.}).text("Âm lượng"));
                 if c.background_original(&self.project) {
                     ui.label(format!("Mức thực tế: {:.0}% (nhân với âm lượng nền của dự án)",c.effective_gain(&self.project)*100.));
                 }
-                ui.horizontal(|ui|{ui.label("Fade vào/ra");ui.add(egui::DragValue::new(&mut fi).range(0..=c.duration_ms).suffix(" ms"));ui.add(egui::DragValue::new(&mut fo).range(0..=c.duration_ms).suffix(" ms"));});
+                ui.horizontal_wrapped(|ui|{ui.label("Fade vào/ra");ui.add(egui::DragValue::new(&mut fi).range(0..=c.duration_ms).suffix(" ms"));ui.add(egui::DragValue::new(&mut fo).range(0..=c.duration_ms).suffix(" ms"));});
             }
             else{ui.add(egui::DragValue::new(&mut z).prefix("Thứ tự "));}
+            });
             if linked!=c.linked||gain!=c.gain||z!=c.z||fi!=c.fade_in_ms||fo!=c.fade_out_ms {
+                if c.track==crate::timeline::MUSIC{self.project.music.gain=gain.min(1.);self.project.music.fade_in_ms=fi.min(60_000);self.project.music.fade_out_ms=fo.min(60_000);}
                 let clip=self.project.composition.as_mut().unwrap().clips.iter_mut().find(|c|c.id==id).unwrap();clip.linked=linked;clip.gain=gain;clip.z=z;clip.fade_in_ms=fi;clip.fade_out_ms=fo;
                 self.project.sync_layer_parameters(&id);
                 self.timeline_view.history.record(before.clone());self.transform_changed();
@@ -264,7 +270,7 @@ impl StudioApp {
             self.set_layer_transform(&id,t);self.timeline_view.history.record(before);
         }
         if c.track==crate::timeline::GRAPHICS || (c.track==crate::timeline::SFX&&c.evidence_id.is_none()) {
-            ui.separator();self.card_sound_settings_ui(ui);
+            settings_group(ui, "layer_card_sound", "Âm thanh thẻ thông tin", false, |ui| self.card_sound_settings_ui(ui));
         }
         egui::CollapsingHeader::new("Danh sách layer • ẩn / khóa").id_salt("layer_visibility").show(ui,|ui|{
         ui.spacing_mut().interact_size.y=22.;

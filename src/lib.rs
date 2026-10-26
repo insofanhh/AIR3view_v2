@@ -1,4 +1,9 @@
 pub mod analysis;
+pub mod background_music;
+#[cfg(test)]
+mod media_upgrades_tests;
+pub mod visual_effects;
+pub mod source_normalization;
 pub mod asr;
 pub mod app;
 pub mod branding;

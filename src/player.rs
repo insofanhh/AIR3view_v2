@@ -5,6 +5,7 @@ use crate::{
     process::{self, Cancel},
 };
 use rodio::Source as AudioSource;
+use anyhow::Context;
 use std::{
     io::{BufReader, Read},
     path::PathBuf,
@@ -137,7 +138,7 @@ impl LayerDecoder {
             let f=(w as f64/info.width.max(1) as f64).min(h as f64/info.height.max(1) as f64);
             let dw=(info.width as f64*f).round() as u32;let dh=(info.height as f64*f).round() as u32;
             // Explicit dimensions avoid ffmpeg rounding differing from allocation.
-            filter=format!("{},scale={dw}:{dh},setsar=1,fps=24,format=rgba",c.pts());(dw,dh)
+            filter=format!("{}{},scale={dw}:{dh},setsar=1,fps=24,format=rgba",c.pts(),crate::visual_effects::filters(p,c)?);(dw,dh)
         }else{(w,h)};
         let mut args=vec!["-v".into(),"error".into(),"-threads".into(),"1".into(),"-filter_threads".into(),"1".into()];args.extend(input);
         args.extend(["-an".into(),"-vf".into(),filter,"-t".into(),format!("{:.6}",c.duration_ms.saturating_sub(local) as f64/1000.),"-pix_fmt".into(),"rgba".into(),"-f".into(),"rawvideo".into(),"pipe:1".into()]);
@@ -178,6 +179,7 @@ impl AudioSource for ControlledAudio {
 }
 #[allow(clippy::too_many_arguments)]
 fn composition_worker(p:&crate::model::Project,s:&Settings,ms:u64,play:bool,cancel:&Cancel,tx:&SyncSender<PlayerEvent>,generation:u64,controls:AudioControls)->anyhow::Result<()> {
+    if play {crate::background_music::prepare(p,s,cancel)?;}
     let comp=p.composition_snapshot();let end=comp.duration_ms();let mut decoders=std::collections::BTreeMap::<String,LayerDecoder>::new();
     let mut stills=std::collections::BTreeMap::<String,image::RgbaImage>::new();
     let mut delivered=std::collections::BTreeSet::new();
@@ -214,7 +216,7 @@ fn composition_worker(p:&crate::model::Project,s:&Settings,ms:u64,play:bool,canc
         for c in active {
             if c.media.as_ref().is_some_and(|v|!v.is_file()){continue;}
             if c.still(){
-                if !stills.contains_key(&c.id){let img=image::open(c.media.as_ref().unwrap())?.to_rgba8();let edge=s.preview_long_edge.clamp(240,1280);let ratio=(edge as f32/img.width().max(img.height()) as f32).min(1.);let img=image::imageops::resize(&img,(img.width() as f32*ratio).round().max(1.) as u32,(img.height() as f32*ratio).round().max(1.) as u32,image::imageops::FilterType::Triangle);stills.insert(c.id.clone(),img);}
+                if !stills.contains_key(&c.id){let img=if crate::visual_effects::selected(p,c).is_some_and(|e|e.active()) {LayerDecoder::new(p,s,c,0)?.read().context("Không đọc được ảnh với hiệu ứng")?}else{image::open(c.media.as_ref().unwrap())?.to_rgba8()};let edge=s.preview_long_edge.clamp(240,1280);let ratio=(edge as f32/img.width().max(img.height()) as f32).min(1.);let img=image::imageops::resize(&img,(img.width() as f32*ratio).round().max(1.) as u32,(img.height() as f32*ratio).round().max(1.) as u32,image::imageops::FilterType::Triangle);stills.insert(c.id.clone(),img);}
                 if !delivered.contains(&c.id){frames.push((c.id.clone(),stills[&c.id].clone()));}
                 if c.motion.backdrop_ms.is_some(){
                     let key=format!("{}#blur",c.id);

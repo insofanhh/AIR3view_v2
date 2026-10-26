@@ -1,4 +1,17 @@
-## AIR3view 0.2.7: tốc độ footage gốc và hook độc lập với giọng AI
+## AIR3view 0.2.8: nhạc nền, màu footage và giao diện thiết lập gọn hơn
+
+- Thêm **Nhạc nền độc lập**: chọn file nhạc, âm lượng, điểm bắt đầu, fade, lặp với nối chuyển tiếp, tự giảm nhạc dưới lời host và tắt nhạc trong đoạn nghe tiếng gốc. Track nhạc riêng hỗ trợ chỉnh sửa trên timeline; nhớ lựa chọn cho dự án sau.
+- Thêm **Màu sắc & lật footage**: LUT có sẵn hoặc nhập `.cube`, chỉnh cường độ, lật ngang/dọc; có ghi đè cho từng layer và đồng bộ theo loại layer. Preview và MP4 dùng cùng hiệu ứng.
+- Thêm **Chuẩn hóa video đầu vào**: tự động, giữ nguyên, đóng gói lại hoặc chuyển mã H.264/AAC; tùy chọn proxy nhẹ. Giữ file gốc, kiểm tra thời lượng và xử lý nguồn xoay, HDR hoặc không có audio.
+- Cache hình và âm thanh độc lập: thay nhạc/âm lượng dùng lại hình đã dựng; thay LUT/lật chỉ cập nhật các phần hình bị ảnh hưởng.
+- Các nhóm con trong **Thiết lập dự án** và **Biên tập → Cảnh / Khung / Sub / Dẫn chứng** có thể đóng/mở riêng; giữ nguyên thông số và trạng thái bật/tắt. Chỉnh bố cục hẹp, vị trí sub và chiều cao các khối thuộc tính cảnh.
+- Bỏ dòng mã nguồn/timestamp ở chân mọi thẻ dẫn chứng; dữ liệu nguồn và đối chiếu vẫn lưu trong dự án. **Dự án cũ:** sau khi cập nhật, bấm **Tạo thẻ / cập nhật** rồi xuất MP4 lại để áp dụng mẫu thẻ mới; không cần tạo lại giọng/nhân vật.
+- Bao gồm sửa xuất MP4 hàng loạt: kiểm tra từng dự án và yêu cầu xác nhận khi xuất lại file đã tồn tại.
+- Kiểm thử local trước khi đẩy: **149 kiểm thử Rust thành công, 1 bỏ qua**, Clippy không cảnh báo; đã kiểm tra bố cục UI 1080×720 / 1440×900 và MP4 dùng mẫu thẻ không có dòng nguồn. GitHub Actions tiếp tục kiểm tra gói cài, cập nhật/khôi phục, render, TTS, avatar và Whisper trước khi công bố release.
+
+**Cập nhật:** bấm **Cập nhật** trong app để tự tải, kiểm tra, cài và mở lại. Dự án/cấu hình được giữ nguyên. Bản ZIP không kèm nhạc mẫu, dữ liệu dự án, cookie hay thông tin đăng nhập của tác giả. Khi mang dự án sang máy khác, cần mang theo các file nhạc/LUT/giọng tham chiếu riêng.
+
+### Tính năng từ 0.2.7: tốc độ footage gốc và hook độc lập với giọng AI
 
 - Thêm **Tốc độ footage gốc / hook** tại **Thiết lập dự án → Hình ảnh đầu ra** và bảng **Khung**: tắt, tự động hoặc tốc độ cố định; điều chỉnh riêng hook và các đoạn gốc xen kẽ. Nhớ thiết lập cho dự án mới và xử lý hàng loạt.
 - Giữ tốc độ giọng AI, nhân vật, phụ đề, dẫn chứng và SFX; tiếng gốc đi theo tốc độ footage. Preview và MP4 dùng cùng phép ánh xạ thời gian nguồn.

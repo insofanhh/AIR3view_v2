@@ -411,6 +411,7 @@ impl Default for GraphicCue {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct Source {
+    pub normalized: PathBuf,
     pub id: String,
     pub url: String,
     pub path: PathBuf,
@@ -424,6 +425,7 @@ pub struct Source {
 impl Default for Source {
     fn default() -> Self {
         Self {
+            normalized:PathBuf::new(),
             id: String::new(),
             url: String::new(),
             path: PathBuf::new(),
@@ -436,6 +438,7 @@ impl Default for Source {
         }
     }
 }
+impl Source {pub fn input_path(&self)->&Path {if self.normalized.is_file(){&self.normalized}else{&self.path}}}
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Word {
@@ -552,6 +555,9 @@ pub struct ScriptPlan {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct Project {
+    pub music: crate::background_music::Settings,
+    pub effects: crate::visual_effects::Settings,
+    pub normalization: crate::source_normalization::Settings,
     pub version: u32,
     pub id: String,
     pub title: String,
@@ -617,6 +623,9 @@ impl ProductionSettings {
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct ProjectDefaults {
+    pub music: crate::background_music::Settings,
+    pub effects: crate::visual_effects::Settings,
+    pub normalization: crate::source_normalization::Settings,
     pub layer_defaults: crate::layer_defaults::LayerDefaults,
     pub rules: ScriptRules,
     pub output: OutputSettings,
@@ -633,9 +642,11 @@ impl ProjectDefaults {
         rules.required_ranges.clear();
         rules.excluded_ranges.clear();
         let export_metadata=crate::export_metadata::MetadataSettings{title:String::new(),creation_time:String::new(),..p.export_metadata.clone()};
-        Self { layer_defaults: crate::layer_defaults::LayerDefaults::from_project(p), rules, output: p.output.clone(), subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),card_sound:p.card_sound.clone(),export_metadata }
+        let mut effects=p.effects.clone();effects.layers.clear();
+        Self { music:p.music.clone(),effects,normalization:p.normalization.clone(),layer_defaults: crate::layer_defaults::LayerDefaults::from_project(p), rules, output: p.output.clone(), subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),card_sound:p.card_sound.clone(),export_metadata }
     }
     pub fn apply(&self, p: &mut Project) {
+        p.music=self.music.clone();p.effects=self.effects.clone();p.normalization=self.normalization.clone();
         p.layer_defaults = self.layer_defaults.clone();
         for (track, sync) in p.timeline.tracks.iter_mut().zip(&self.layer_defaults.sync_parameters) {
             track.sync_parameters = *sync;
@@ -670,6 +681,7 @@ impl Default for Project {
     fn default() -> Self {
         Self {
             version: 1,
+            music:Default::default(),effects:Default::default(),normalization:Default::default(),
             id: Uuid::new_v4().to_string(),
             title: "Dự án mới".into(),
             analysis_summary: String::new(),
@@ -770,6 +782,9 @@ impl Project {
         Ok(p)
     }
     pub fn validate_configuration(&self) -> Result<()> {
+        self.music.validate()?;self.effects.footage.validate()?;
+        for e in self.effects.layers.values(){e.validate()?;}
+        self.normalization.validate()?;
         self.output.footage_speed.validate()?;
         self.card_sound.validate()?;
         crate::evidence::validate(self)?;

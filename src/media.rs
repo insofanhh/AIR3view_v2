@@ -38,6 +38,10 @@ pub fn probe(settings: &Settings, path: &Path, cancel: &Cancel) -> Result<Source
     let v: Value = serde_json::from_slice(&o.stdout)?;
     let streams = v["streams"].as_array().context("Video không có stream")?;
     let visual = streams.iter().find(|s| s["codec_type"] == "video");
+    let rotation=visual.and_then(|v|v["side_data_list"].as_array()).and_then(|v|v.iter().find_map(|v|v["rotation"].as_f64())).unwrap_or(0.);
+    let rotated=(rotation.abs().round() as i32).rem_euclid(180)==90;
+    let width=visual.and_then(|v|v["width"].as_u64()).unwrap_or(0) as u32;
+    let height=visual.and_then(|v|v["height"].as_u64()).unwrap_or(0) as u32;
     let seconds = v["format"]["duration"]
         .as_str()
         .and_then(|s| s.parse::<f64>().ok())
@@ -49,8 +53,8 @@ pub fn probe(settings: &Settings, path: &Path, cancel: &Cancel) -> Result<Source
     Ok(Source {
         path: path.to_owned(),
         duration_ms: (seconds * 1000.0).round() as u64,
-        width: visual.and_then(|v| v["width"].as_u64()).unwrap_or(0) as u32,
-        height: visual.and_then(|v| v["height"].as_u64()).unwrap_or(0) as u32,
+        width: if rotated{height}else{width},
+        height: if rotated{width}else{height},
         has_audio: streams.iter().any(|s| s["codec_type"] == "audio"),
         ..Default::default()
     })
@@ -177,10 +181,10 @@ pub fn proxy(
 ) -> Result<PathBuf> {
     fs::create_dir_all(folder)?;
     let key = hash(format!(
-        "{}:{}:{}",
+        "{}:{}:{}:{:?}",
         source.path.display(),
         source.duration_ms,
-        fs::metadata(&source.path)?.len()
+        fs::metadata(&source.path)?.len(),fs::metadata(&source.path)?.modified().ok()
     ));
     let path = folder.join(format!("{key}.mp4"));
     if path.is_file() && probe(settings, &path, cancel).is_ok() {
@@ -539,6 +543,10 @@ pub fn render<F: FnMut(usize, usize)>(
 ) -> Result<()> {
     p.validate(true)?;
     p.check_duration()?;
+    if p.music.enabled || p.effects.footage.active() || !p.effects.layers.is_empty() {
+        let mut prepared=p.clone();prepared.ensure_composition();
+        crate::layer_media::export_with_progress(&prepared,settings,output,cancel,progress)?;return Ok(());
+    }
     if p.composition.is_some() || p.segments.iter().any(|v|v.source_rate!=1.||!v.footage_spans.is_empty()) {
         crate::layer_media::export_with_progress(p,settings,output,cancel,progress)?;
         return Ok(());
