@@ -1,4 +1,13 @@
-## AIR3view 0.2.9: xuất/nhập thiết lập và đồng bộ xóa dự án
+## AIR3view 0.2.10: sửa lỗi xuất thiết lập với nhân vật 2D
+
+- Sửa lỗi **Xuất thiết lập** báo thiếu ảnh HeyGen cũ khi đang dùng nhân vật **2D local**. Nhân vật 2D có sẵn được chuyển bằng mã lựa chọn, không phụ thuộc đường dẫn ảnh của nhà cung cấp khác.
+- Bỏ các đường dẫn ảnh không được dùng khi tắt nhân vật hoặc chọn HeyGen bằng avatar ID; bỏ file giọng tham chiếu/nhạc nền khi các mục đó đang tắt. Dự án gốc giữ nguyên; tài nguyên đang bật vẫn được kiểm tra đầy đủ.
+- Áp dụng cho cả gói kèm tài nguyên và gói chỉ chứa thiết lập. Giữ nguyên định dạng `.air3preset` và khả năng nhập các gói đã xuất trước đó.
+- Kiểm thử local: **165 kiểm thử Rust thành công, 1 bỏ qua**, Clippy sạch; đã xuất, kiểm tra và nhập lại bằng cấu hình lưu thực tế có đường dẫn ảnh cũ bị thiếu. GitHub Actions tiếp tục kiểm tra updater/khôi phục, gói cài, render, TTS, avatar và Whisper trước khi công bố.
+
+**Cập nhật:** bấm **Cập nhật** trong app để tự tải, cài và mở lại; sau đó xuất thiết lập lại. Dự án và cấu hình cũ được giữ nguyên. Người cài mới tải bản **windows-x64.zip**, giải nén đầy đủ rồi mở **AIR3view.exe**.
+
+### Tính năng từ 0.2.9: xuất/nhập thiết lập và đồng bộ xóa dự án
 
 - Thêm **Biên tập video → Thiết lập → Xuất thiết lập / Nhập thiết lập**. Chuyển các thông số kịch bản, ngôn ngữ, thời lượng, hình ảnh, tốc độ, giọng/nhân vật, dẫn chứng, âm thanh, phụ đề, mẫu layer, track và metadata giữa các máy bằng một file `.air3preset`.
 - Mặc định kèm ảnh nhân vật, giọng tham chiếu, nhạc và LUT tùy chỉnh; kiểm tra SHA-256 và đổi đường dẫn theo kho asset của máy nhận. Gói không kèm tài nguyên cho phép chọn lại đúng file trước khi nhập.

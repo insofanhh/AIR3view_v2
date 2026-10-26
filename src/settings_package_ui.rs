@@ -269,7 +269,7 @@ impl StudioApp {
                     if summary.production.is_none(){summary.production=Some(ProductionSettings::from_settings(&self.settings));}
                     settings_summary(ui,&summary);
                     ui.separator();
-                    ui.checkbox(&mut self.presets.include_assets,"Kèm ảnh nhân vật, giọng mẫu, nhạc và LUT đang chọn");
+                    ui.checkbox(&mut self.presets.include_assets,"Kèm ảnh nhân vật, giọng mẫu, nhạc và LUT đang sử dụng");
                     if !self.presets.include_assets {ui.colored_label(egui::Color32::YELLOW,"Máy nhận cần chọn lại đúng các file tài nguyên trước khi nhập.");}
                     ui.add(egui::Label::new(RichText::new("Giữ cấu hình kết nối, cookie, đăng nhập và nơi lưu theo máy nhận. Video nguồn và nội dung timeline giữ riêng trong dự án.").small().color(MUTED)).wrap());
                 }else if let Some(loaded)=&self.presets.loaded {

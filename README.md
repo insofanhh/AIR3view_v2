@@ -1,6 +1,6 @@
 # AIR3view
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.9. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.10. Preview, timeline và các layer nằm ngay trong app.
 
 ## Xuất / nhập thiết lập giữa các máy
 
@@ -9,6 +9,8 @@ Trong **Biên tập video**, mở nút **Thiết lập** trên thanh công cụ:
 1. **Xuất thiết lập…**: lưu các thông số hiện tại (kể cả chưa lưu dự án) thành một file `.air3preset`. Mặc định kèm ảnh nhân vật, giọng tham chiếu, nhạc và LUT đã chọn. File dùng container riêng của AIR3view, không cần giải nén.
 2. Chuyển file sang máy khác, chọn **Thiết lập → Nhập thiết lập…**. Xem tóm tắt, chọn **Áp dụng cho dự án hiện tại** và/hoặc **Ghi nhớ cho các dự án tiếp theo**, rồi bấm **Nhập thiết lập**.
 3. Nếu xuất không kèm tài nguyên, chọn lại đúng các file tương ứng trên máy nhận. App kiểm tra mã SHA-256 trước khi nhập. Tài nguyên được chép vào kho asset của app và đổi đường dẫn theo máy nhận.
+
+Chỉ đóng gói ảnh đang dùng bởi HeyGen, giọng tham chiếu đang bật và nhạc nền đang bật. Nhân vật 2D có sẵn được mang theo bằng mã lựa chọn, không cần ảnh HeyGen cũ. Khi chọn HeyGen bằng avatar ID, ảnh local không được sử dụng. Các đường dẫn ảnh/giọng/nhạc đã tắt được bỏ khỏi bản xuất; dự án gốc giữ nguyên.
 
 Gói gồm prompt/quy tắc/thời lượng/ngôn ngữ, hook/cảnh xen kẽ, khung hình/tốc độ/màu/lật/nền mờ, voice/nhân vật, dẫn chứng/SFX, nhạc/tiếng gốc, phụ đề, mẫu thông số/hiệu ứng theo vai trò layer, mute/tick đồng bộ track, snapping và metadata. Khóa track giữ theo dự án đích. URL, mốc chọn nguồn, nội dung cảnh, file sinh ra và timing layer giữ riêng theo dự án; đổi tốc độ có thể điều chỉnh thời lượng cảnh gốc theo cơ chế khớp footage hiện có.
 
@@ -189,8 +191,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1 -SkipB
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-source.ps1
 ```
 
-- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.9-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
-- Source sạch: `dist/AIR3view-0.2.9-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
+- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.10-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
+- Source sạch: `dist/AIR3view-0.2.10-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
 - Package dùng danh sách runtime và ghi SHA256 trong `package-manifest.json`. Không sinh bản EXE dự phòng. Có file lạ ở thư mục đích thì script báo lỗi để tránh đưa nhầm vào release.
 - Giữ `Cargo.lock`. Unit test nằm trong module Rust, chỉ biên dịch khi chạy `scripts/build.cmd test --release --lib --locked`; không nằm trong EXE release.
 - `.gitignore` loại build/dist/runtime/dữ liệu local. Không commit key, cookie hay cấu hình cá nhân.

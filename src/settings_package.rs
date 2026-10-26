@@ -138,6 +138,16 @@ pub fn export(
             .clone()
             .unwrap_or_else(|| ProductionSettings::from_settings(runtime)),
     );
+    // Old projects retain choices from providers that are no longer selected.
+    // Built-in 2D rigs never read the HeyGen photo; disabled inputs likewise
+    // must not block a portable preset or leak an obsolete machine path.
+    if let Some(p) = &mut settings.production {
+        if !p.avatar_enabled || p.avatar_provider == "cartoon2d" || !p.avatar_id.is_empty() {
+            p.avatar_image_path.clear();
+        }
+        if !p.voice_reference_enabled {p.voice_reference_path.clear();}
+    }
+    if !settings.music.enabled {settings.music.file.clear();settings.music.name.clear();}
     // Unlike the automatic defaults, an explicit package carries all metadata choices.
     settings.export_metadata = project.export_metadata.clone();
     let mut assets = Vec::<Asset>::new();
@@ -670,7 +680,7 @@ mod tests {
         p.subtitles.highlight = [45, 90, 255];
         p.production = Some(ProductionSettings {
             avatar_enabled: true,
-            avatar_provider: "cartoon2d".into(),
+            avatar_provider: "heygen".into(),
             cartoon_character: "panda".into(),
             avatar_image_path: image.to_string_lossy().into_owned(),
             voice_reference_enabled: true,
@@ -870,6 +880,47 @@ mod tests {
         p.music.file = temp.path().join("missing.wav");
         assert!(export(&p, &Settings::default(), &path, true, &|_| {}).is_err());
         assert_eq!(fs::read(path).unwrap(), b"previous preset");
+    }
+
+    #[test]
+    fn built_in_2d_exports_without_the_stale_heygen_photo_for_bundled_and_settings_only_presets() {
+        let temp=tempfile::tempdir().unwrap();let mut p=fixture(temp.path());
+        let stale=temp.path().join("deleted-project/inputs/old-photo.jpg");
+        let prod=p.production.as_mut().unwrap();prod.avatar_provider="cartoon2d".into();prod.cartoon_character="portrait".into();prod.avatar_image_path=stale.to_string_lossy().into_owned();
+        let before=serde_json::to_vec(&p).unwrap();
+        for include in [true,false] {
+            let path=temp.path().join(format!("two-d-{include}.air3preset"));
+            export(&p,&Settings::default(),&path,include,&|_|{}).unwrap();
+            let loaded=load(&path,&|_|{}).unwrap();let prod=loaded.manifest.settings.production.as_ref().unwrap();
+            assert_eq!(prod.avatar_provider,"cartoon2d");assert_eq!(prod.cartoon_character,"portrait");assert!(prod.avatar_image_path.is_empty());
+            assert!(loaded.manifest.assets.iter().all(|a|!matches!(a.kind,AssetKind::Avatar)));
+            assert_eq!(loaded.manifest.assets.len(),2,"Keep active reference/music and LUT");
+            assert!(!String::from_utf8_lossy(&fs::read(&path).unwrap()).contains("old-photo.jpg"));
+            if include {
+                let data=tempfile::tempdir().unwrap();let cfg=loaded.resolve(data.path(),&BTreeMap::new(),&|_|{}).unwrap();
+                assert!(cfg.production.as_ref().unwrap().voice_reference_enabled);assert!(cfg.music.file.is_file());
+                assert!(apply(&cfg,&Project::default()).is_ok());
+            }
+        }
+        assert_eq!(before,serde_json::to_vec(&p).unwrap(),"Export must not change the original project");
+    }
+
+    #[test]
+    fn disabled_or_id_selected_inputs_do_not_require_unused_local_files() {
+        let temp=tempfile::tempdir().unwrap();let mut p=fixture(temp.path());
+        let prod=p.production.as_mut().unwrap();prod.avatar_id="account-avatar".into();prod.avatar_image_path="missing/photo.jpg".into();
+        prod.voice_reference_enabled=false;prod.voice_reference_path="missing/reference.wav".into();
+        p.music.enabled=false;p.music.file="missing/song.mp3".into();
+        let path=temp.path().join("selected-id.air3preset");export(&p,&Settings::default(),&path,true,&|_|{}).unwrap();
+        let loaded=load(&path,&|_|{}).unwrap();let cfg=&loaded.manifest.settings;let prod=cfg.production.as_ref().unwrap();
+        assert_eq!(prod.avatar_id,"account-avatar");assert!(prod.avatar_image_path.is_empty()&&prod.voice_reference_path.is_empty());assert!(cfg.music.file.as_os_str().is_empty());
+        assert_eq!(loaded.manifest.assets.len(),1,"Only the active LUT is needed");
+        p.production.as_mut().unwrap().avatar_id.clear();
+        assert!(export(&p,&Settings::default(),&path,true,&|_|{}).is_err(),"An active HeyGen photo must still be required");
+        p.production.as_mut().unwrap().avatar_enabled=false;
+        assert!(export(&p,&Settings::default(),&path,true,&|_|{}).is_ok());
+        p.production.as_mut().unwrap().voice_reference_enabled=true;
+        assert!(export(&p,&Settings::default(),&path,true,&|_|{}).is_err(),"Active reference audio must still be required");
     }
     #[test]
     fn import_preserves_scene_content_and_timing_but_maps_layer_styles_to_new_ids() {
