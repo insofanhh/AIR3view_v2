@@ -27,13 +27,15 @@ impl StudioApp {
     pub(super) fn layer_effects_ui(&mut self,ui:&mut egui::Ui,c:&crate::composition::LayerClip){
         if c.audio()||c.media.is_none(){return;}
         egui::CollapsingHeader::new("Màu & lật riêng layer").id_salt(("layer_effects",&c.id)).show(ui,|ui|{
-            let mut override_on=self.project.effects.layers.contains_key(&c.id);
+            let role=crate::layer_defaults::LayerDefaults::key(&self.project,c);
+            let mut override_on=self.project.effects.layers.contains_key(&c.id)||role.as_ref().is_some_and(|key|self.project.layer_defaults.effects.contains_key(key));
             if ui.checkbox(&mut override_on,"Ghi đè thiết lập dự án").changed(){
-                let before=self.project.clone();if override_on{let effect=crate::visual_effects::selected(&self.project,c).cloned().unwrap_or_default();self.project.effects.layers.insert(c.id.clone(),effect);}else{self.project.effects.layers.remove(&c.id);}self.timeline_view.history.record(before);self.media_settings_changed();
+                let before=self.project.clone();if override_on{let effect=crate::visual_effects::selected(&self.project,c).cloned().unwrap_or_default();self.project.effects.layers.insert(c.id.clone(),effect);}else{self.project.effects.layers.remove(&c.id);if let Some(key)=&role{self.project.layer_defaults.effects.remove(key);}}self.timeline_view.history.record(before);self.media_settings_changed();
             }
             if override_on {
-                let before=self.project.clone();let changed=effect_fields(ui,self.project.effects.layers.get_mut(&c.id).unwrap());
+                let before=self.project.clone();let mut effect=crate::visual_effects::selected(&self.project,c).cloned().unwrap_or_default();let changed=effect_fields(ui,&mut effect);
                 if changed {
+                    self.project.effects.layers.insert(c.id.clone(),effect);
                     if self.project.timeline.tracks[c.track].sync_parameters {
                         let effect=self.project.effects.layers[&c.id].clone();let targets=self.project.layer_parameter_targets(&c.id,false);
                         for id in targets{self.project.effects.layers.insert(id,effect.clone());}

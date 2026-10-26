@@ -1,4 +1,16 @@
-## AIR3view 0.2.8: nhạc nền, màu footage và giao diện thiết lập gọn hơn
+## AIR3view 0.2.9: xuất/nhập thiết lập và đồng bộ xóa dự án
+
+- Thêm **Biên tập video → Thiết lập → Xuất thiết lập / Nhập thiết lập**. Chuyển các thông số kịch bản, ngôn ngữ, thời lượng, hình ảnh, tốc độ, giọng/nhân vật, dẫn chứng, âm thanh, phụ đề, mẫu layer, track và metadata giữa các máy bằng một file `.air3preset`.
+- Mặc định kèm ảnh nhân vật, giọng tham chiếu, nhạc và LUT tùy chỉnh; kiểm tra SHA-256 và đổi đường dẫn theo kho asset của máy nhận. Gói không kèm tài nguyên cho phép chọn lại đúng file trước khi nhập.
+- Xem tóm tắt trước khi nhập, chọn áp dụng cho dự án hiện tại và/hoặc ghi nhớ cho dự án tiếp theo. Sao lưu cấu hình trước khi thay đổi và khôi phục nếu lưu thất bại. Đọc/ghi/hash file chạy nền; khóa thao tác khi đang xử lý dự án/hàng loạt.
+- Giữ kết nối, key, đăng nhập, cookie và nơi lưu theo máy nhận. Giữ URL, nội dung cảnh và timing layer theo dự án; đổi tốc độ footage có thể điều chỉnh thời lượng cảnh gốc. Đổi ngôn ngữ/giọng/nhân vật/kiểu dẫn chứng cần tạo lại nội dung tương ứng. Font không đóng gói, cần cài font hoặc chọn font có trên máy nhận.
+- Mẫu màu/lật theo vai trò layer và thông số mute/snapping/tick đồng bộ được nhớ cho dự án mới. Khóa track giữ theo dự án đích. Bố cục các hộp thoại và thanh công cụ được kiểm tra ở cửa sổ nhỏ/lớn.
+- Xóa dự án trong **Thư viện dự án** cũng gỡ dự án khỏi mọi phiên **Xử lý hàng loạt** và phạm vi xuất MP4 liên quan. Danh sách cập nhật ngay và giữ đúng sau khi mở lại. Giữ lịch sử phiên trống; nếu xóa thất bại thì giữ mục để thử lại. Tạm dừng phiên đang chạy trước khi xóa.
+- Kiểm thử local: **163 kiểm thử Rust thành công, 1 bỏ qua**, Clippy không cảnh báo; có kiểm thử chuyển tài nguyên sang đường dẫn khác, khôi phục khi file bị khóa, thao tác UI và xuất MP4 thật sau khi nhập preset. CI tiếp tục kiểm tra updater/khôi phục, gói cài, render, TTS, avatar và Whisper trước khi công bố release.
+
+**Cập nhật:** bấm **Cập nhật** trong app để tự tải, kiểm tra, cài và mở lại. Người cài mới tải bản **windows-x64.zip**, giải nén đầy đủ rồi mở **AIR3view.exe**. Dự án và cấu hình cũ được giữ nguyên.
+
+### Tính năng từ 0.2.8: nhạc nền, màu footage và giao diện thiết lập gọn hơn
 
 - Thêm **Nhạc nền độc lập**: chọn file nhạc, âm lượng, điểm bắt đầu, fade, lặp với nối chuyển tiếp, tự giảm nhạc dưới lời host và tắt nhạc trong đoạn nghe tiếng gốc. Track nhạc riêng hỗ trợ chỉnh sửa trên timeline; nhớ lựa chọn cho dự án sau.
 - Thêm **Màu sắc & lật footage**: LUT có sẵn hoặc nhập `.cube`, chỉnh cường độ, lật ngang/dọc; có ghi đè cho từng layer và đồng bộ theo loại layer. Preview và MP4 dùng cùng hiệu ứng.

@@ -450,6 +450,51 @@ pub fn running(data: &Path) -> bool {
 pub fn reserved_project(data: &Path, id: &str) -> bool {
     list(data).iter().any(|b| b.reserved(id)) && running(data)
 }
+/// Remove all session references under the same queue leases used by workers.
+/// Persist first so an unwritable queue cannot leave a deleted project in the
+/// list; restore the previous sessions if filesystem deletion fails.
+pub(crate) fn remove_project<T>(
+    data: &Path,
+    project_id: &str,
+    delete: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let sessions: Vec<_> = list(data).into_iter()
+        .filter(|b| b.items.iter().any(|i| i.project_id == project_id)).collect();
+    let mut leases = Vec::new();
+    let mut originals = Vec::new();
+    for session in sessions {
+        let folder = root(data, &session.id)?;
+        leases.push(Lease::acquire(&folder.join("queue.lock"))
+            .context("Phiên xử lý hàng loạt chứa dự án này đang chạy; tạm dừng phiên trước khi xóa")?);
+        // Read again after locking: another writer may have just saved progress.
+        originals.push(Batch::load(&folder.join("batch.json"))?);
+    }
+    let mut attempted = 0;
+    let result = (|| {
+        for original in &originals {
+            let mut updated = original.clone();
+            updated.items.retain(|i| i.project_id != project_id);
+            if let Some(scope) = &mut updated.run_items {
+                scope.retain(|id| updated.items.iter().any(|i| &i.id == id));
+            }
+            attempted += 1;
+            updated.save(data).context("Không cập nhật được danh sách hàng loạt; chưa xóa dự án")?;
+        }
+        delete()
+    })();
+    if result.is_err() {
+        let mut failed = Vec::new();
+        for original in originals[..attempted].iter().rev() {
+            if let Err(error) = original.save(data) {
+                failed.push(format!("{}: {error:#}", original.title));
+            }
+        }
+        if !failed.is_empty() {
+            return result.context(format!("Không khôi phục được danh sách phiên: {}", failed.join("; ")));
+        }
+    }
+    result
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "action", content = "item_id", rename_all = "snake_case")]
 pub enum Action {
@@ -1188,6 +1233,81 @@ mod tests {
         };
         (temp, p, s)
     }
+    #[test]
+    fn library_deletion_removes_project_from_all_sessions_and_export_scopes() {
+        let (temp, p, s) = setup();
+        let mut first = create(temp.path(), "First", URLS, &p, &s, false, None).unwrap();
+        let target = first.items[0].clone();
+        let path = project_path(temp.path(), &target).unwrap();
+        first.items[0].state = State::Exported;
+        first.run_items = Some(first.items.iter().map(|i| i.id.clone()).collect());
+        first.save(temp.path()).unwrap();
+        let mut second = create(temp.path(), "Second", &target.url, &p, &s, false, None).unwrap();
+        second.items = vec![target.clone()];
+        second.run_items = Some(vec![target.id.clone()]);
+        second.save(temp.path()).unwrap();
+        let external = temp.path().join("exported.mp4");
+        fs::write(&external, b"keep external output").unwrap();
+        let library = temp.path().join("projects");
+        crate::project_store::delete(&library, &path, None).unwrap();
+        assert!(!path.parent().unwrap().exists());
+        let sessions = list(temp.path());
+        assert_eq!(sessions.len(), 2, "Retain session history, including an empty session");
+        for session in &sessions {
+            assert!(session.items.iter().all(|i| i.project_id != target.project_id));
+            assert!(session.run_items.as_ref().unwrap().iter().all(|id| session.items.iter().any(|i| &i.id == id)));
+        }
+        let remaining = sessions.iter().find(|b| b.id == first.id).unwrap();
+        assert_eq!(remaining.items.len(), 2);
+        assert!(remaining.items.iter().all(|i| project_path(temp.path(), i).unwrap().is_file()));
+        assert!(sessions.iter().find(|b| b.id == second.id).unwrap().items.is_empty());
+        assert_eq!(fs::read(external).unwrap(), b"keep external output");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn library_deletion_keeps_queue_on_locked_media_and_refuses_active_session() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (temp, p, s) = setup();
+        let mut b = create(temp.path(), "Delete guards", URLS, &p, &s, false, None).unwrap();
+        b.items[0].state = State::Ready;
+        b.save(temp.path()).unwrap();
+        let path = project_path(temp.path(), &b.items[0]).unwrap();
+        let library = temp.path().join("projects");
+        let manifest = root(temp.path(), &b.id).unwrap().join("batch.json");
+        let before = fs::read(&manifest).unwrap();
+        let queue = Lease::acquire(&root(temp.path(), &b.id).unwrap().join("queue.lock")).unwrap();
+        let error = crate::project_store::delete(&library, &path, None).unwrap_err();
+        assert!(format!("{error:#}").contains("tạm dừng phiên"));
+        assert!(path.is_file());
+        assert_eq!(fs::read(&manifest).unwrap(), before);
+        drop(queue);
+        let locked = fs::OpenOptions::new().create(true).truncate(true).write(true).share_mode(0)
+            .open(path.parent().unwrap().join("locked.wav")).unwrap();
+        assert!(crate::project_store::delete(&library, &path, None).is_err());
+        assert!(path.is_file());
+        assert_eq!(fs::read(&manifest).unwrap(), before, "Restore session if project removal fails");
+        drop(locked);
+        crate::project_store::delete(&library, &path, None).unwrap();
+        assert_eq!(Batch::load(&manifest).unwrap().items.len(), 2);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn unwritable_batch_manifest_prevents_project_deletion() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (temp, p, s) = setup();
+        let b = create(temp.path(), "Unwritable session", URLS, &p, &s, false, None).unwrap();
+        let path = project_path(temp.path(), &b.items[0]).unwrap();
+        let manifest = root(temp.path(), &b.id).unwrap().join("batch.json");
+        let before = fs::read(&manifest).unwrap();
+        let locked = fs::OpenOptions::new().read(true).share_mode(1).open(&manifest).unwrap();
+        assert!(crate::project_store::delete(&temp.path().join("projects"), &path, None).is_err());
+        assert!(path.is_file());
+        assert_eq!(fs::read(&manifest).unwrap(), before);
+        drop(locked);
+    }
+
     #[test]
     fn batch_creation_isolates_sources_snapshots_and_does_not_inherit_timeline() {
         let (temp, mut p, mut s) = setup();

@@ -76,3 +76,24 @@ fn music_and_picture_overrides_follow_independent_timeline_edits(){
     p.effects.layers.insert(id.clone(),fx::Effect{mirror_y:true,..Default::default()});
     let split=p.edit_independent_layer(&id,"split",4000,&mut None).unwrap().unwrap();assert!(p.effects.layers[&split].mirror_y);
 }
+
+#[test]
+fn portable_preset_real_preview_and_export_use_relocated_music_and_layer_lut(){
+    let (_temp,mut p,s)=fixture();let cancel=process::cancel_token();let target=tempfile::tempdir().unwrap();
+    let lut=p.root.join("portable.cube");fs::write(&lut,"LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").unwrap();
+    let id=p.composition.as_ref().unwrap().clips.iter().find(|c|c.track==timeline::VIDEO&&c.scene_id=="review").unwrap().id.clone();
+    p.effects.layers.insert(id,fx::Effect{mirror_x:true,lut:lut.to_string_lossy().into_owned(),strength:0.8,..Default::default()});
+    let voice=p.segments[1].audio.as_ref().unwrap().clone();let voice_bytes=fs::read(&voice).unwrap();
+    let bundle=p.root.join("portable.air3preset");crate::settings_package::export(&p,&s,&bundle,true,&|_|{}).unwrap();
+    let loaded=crate::settings_package::load(&bundle,&|_|{}).unwrap();
+    let cfg=loaded.resolve(target.path(),&Default::default(),&|_|{}).unwrap();
+    // Remove only synthetic fixture originals; imported assets must stand alone.
+    fs::remove_file(&p.music.file).unwrap();fs::remove_file(&lut).unwrap();
+    let next=crate::settings_package::apply(&cfg,&p).unwrap();assert!(next.music.file.starts_with(target.path()));
+    let comp=next.composition_snapshot();let layer=comp.clips.iter().find(|c|c.track==timeline::VIDEO&&c.scene_id=="review").unwrap();
+    let preview=crate::player::decode_test_frame(&next,&s,layer,0).unwrap();let pixel=preview.get_pixel(preview.width()/4,preview.height()/2);assert!(pixel[2]>pixel[0]+100);
+    let output=target.path().join("imported-preset.mp4");media::render(&next,&s,&output,&cancel,|_,_|{}).unwrap();
+    let info=media::probe(&s,&output,&cancel).unwrap();assert!(info.duration_ms.abs_diff(8000)<60&&info.has_audio);
+    let frame=media::frame(&s,&output,3000,&cancel).unwrap();let left=frame.get_pixel(frame.width()/4,frame.height()/2);assert!(left[2]>left[0]+70,"Imported layer effect must match preview");
+    assert!(rms(&output,3.,3.5)>100.);assert_eq!(voice_bytes,fs::read(voice).unwrap());
+}

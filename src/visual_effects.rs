@@ -20,7 +20,9 @@ impl Effect {
     pub fn active(&self)->bool {self.mirror_x||self.mirror_y||(self.lut!="off"&&self.strength>0.)}
 }
 pub fn selected<'a>(p:&'a Project,c:&LayerClip)->Option<&'a Effect> {
-    p.effects.layers.get(&c.id).or_else(||if matches!(c.track,timeline::VIDEO|timeline::BACKGROUND)&&!c.still(){Some(&p.effects.footage)}else{None})
+    p.effects.layers.get(&c.id)
+        .or_else(||crate::layer_defaults::LayerDefaults::key(p,c).and_then(|key|p.layer_defaults.effects.get(&key)))
+        .or_else(||if matches!(c.track,timeline::VIDEO|timeline::BACKGROUND)&&!c.still(){Some(&p.effects.footage)}else{None})
 }
 pub fn fingerprint(path:&Path)->String {
     type Cache=BTreeMap<PathBuf,(u64,Option<std::time::SystemTime>,String)>;

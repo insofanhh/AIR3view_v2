@@ -31,6 +31,12 @@ pub(super) struct BatchView {
     export_rx: mpsc::Receiver<anyhow::Result<batch::ExportPlan>>,
 }
 impl BatchView {
+    pub fn refresh_after_project_delete(&mut self, data: &std::path::Path) {
+        self.batches = batch::list(data);
+        self.pending_export = None;
+        self.detail.clear();
+        self.last_poll = Instant::now();
+    }
     pub fn load(data: &std::path::Path) -> Self {
         let (tx, rx) = mpsc::channel();
         let (export_tx, export_rx) = mpsc::channel();
@@ -691,6 +697,9 @@ impl StudioApp {
             self.batch_session_ui(ui,&visible)
         };
         let Some((b,mut action,start,mut retry_start))=selected else {return;};
+        if b.items.is_empty() {
+            ui.label(RichText::new("Phiên này không còn dự án.").color(MUTED));
+        }
         let mut open=None;
         let mut export_item=None;
         ui.add_space(8.);
@@ -878,6 +887,55 @@ fn read_tail(path: &std::path::Path, item_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn library_confirmed_delete_refreshes_session_rows_and_survives_restart() {
+        let ctx = egui::Context::default();
+        let mut app = StudioApp::from_context(&ctx); app.capture_path = None;
+        ctx.style_mut(|style| style.animation_time = 0.);
+        let data = app.projects_root.parent().unwrap().to_owned();
+        let b = batch::create(&data, "Delete sync UI", "https://youtu.be/dBy-8s6ly08\nhttps://youtu.be/r1cvbJJ5G54",
+            &app.project, &app.settings, false, None).unwrap();
+        let target = b.items[0].clone();
+        let path = batch::project_path(&data, &target).unwrap();
+        app.project = Project::load(&path).unwrap();
+        app.batch_view = BatchView::load(&data);
+        app.history = project_store::list(&app.projects_root);
+        app.page = Page::Projects;
+        let screen = Rect::from_min_size(Pos2::ZERO, Vec2::new(1440.,900.));
+        let draw = |app:&mut StudioApp, events| {
+            let _ = ctx.run(egui::RawInput{screen_rect:Some(screen),events,..Default::default()},|ctx| app.draw(ctx));
+        };
+        let click = |app:&mut StudioApp,key:&str| {
+            let pos=app.hitboxes[key].center();
+            for pressed in [true,false] {
+                draw(app,vec![egui::Event::PointerMoved(pos),egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);
+            }
+            draw(app,vec![]);
+        };
+        draw(&mut app,vec![]); draw(&mut app,vec![]);
+        let delete_key = format!("delete_{}",target.project_id);
+        click(&mut app,&delete_key);
+        for key in ["delete_cancel","delete_confirm"] {assert!(screen.contains_rect(app.hitboxes[key]));}
+        click(&mut app,"delete_cancel");
+        assert!(path.exists());
+        assert_eq!(app.selected_batch().unwrap().items.len(),2);
+        click(&mut app,&delete_key);
+        app.dirty=true;
+        click(&mut app,"delete_confirm");
+        assert!(!path.parent().unwrap().exists());
+        assert!(!app.is_error && !app.dirty && app.pending_delete.is_none());
+        let selected=app.selected_batch().unwrap();
+        assert_eq!(selected.items.len(),1);
+        assert_eq!(selected.items[0].project_id,b.items[1].project_id);
+        let reloaded=BatchView::load(&data);
+        assert_eq!(reloaded.batches[0].items.len(),1);
+        app.page=Page::Batch; app.hitboxes.clear(); draw(&mut app,vec![]); draw(&mut app,vec![]);
+        assert!(app.hitboxes.contains_key("batch_item_0"));
+        assert!(!app.hitboxes.contains_key("batch_item_1"));
+        app.last_save=Instant::now()-Duration::from_secs(3); draw(&mut app,vec![]);
+        assert!(!path.parent().unwrap().exists(),"Autosave must not recreate the deleted project");
+    }
+
     #[test]
     fn missing_project_preflight_runs_in_background_and_never_starts_a_worker() {
         let ctx = egui::Context::default();

@@ -623,6 +623,7 @@ impl ProductionSettings {
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct ProjectDefaults {
+    pub timeline: Option<crate::timeline::TimelineSettings>,
     pub music: crate::background_music::Settings,
     pub effects: crate::visual_effects::Settings,
     pub normalization: crate::source_normalization::Settings,
@@ -643,9 +644,15 @@ impl ProjectDefaults {
         rules.excluded_ranges.clear();
         let export_metadata=crate::export_metadata::MetadataSettings{title:String::new(),creation_time:String::new(),..p.export_metadata.clone()};
         let mut effects=p.effects.clone();effects.layers.clear();
-        Self { music:p.music.clone(),effects,normalization:p.normalization.clone(),layer_defaults: crate::layer_defaults::LayerDefaults::from_project(p), rules, output: p.output.clone(), subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),card_sound:p.card_sound.clone(),export_metadata }
+        let mut timeline=p.timeline.clone();for track in &mut timeline.tracks{track.locked=false;}
+        Self { timeline:Some(timeline),music:p.music.clone(),effects,normalization:p.normalization.clone(),layer_defaults: crate::layer_defaults::LayerDefaults::from_project(p), rules, output: p.output.clone(), subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),card_sound:p.card_sound.clone(),export_metadata }
     }
     pub fn apply(&self, p: &mut Project) {
+        if let Some(timeline)=&self.timeline {
+            let locks:Vec<_>=p.timeline.tracks.iter().map(|t|t.locked).collect();
+            p.timeline=timeline.clone();
+            for (t,locked) in p.timeline.tracks.iter_mut().zip(locks){t.locked=locked;}
+        }
         p.music=self.music.clone();p.effects=self.effects.clone();p.normalization=self.normalization.clone();
         p.layer_defaults = self.layer_defaults.clone();
         for (track, sync) in p.timeline.tracks.iter_mut().zip(&self.layer_defaults.sync_parameters) {

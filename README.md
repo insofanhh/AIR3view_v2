@@ -1,6 +1,20 @@
 # AIR3view
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.7. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.9. Preview, timeline và các layer nằm ngay trong app.
+
+## Xuất / nhập thiết lập giữa các máy
+
+Trong **Biên tập video**, mở nút **Thiết lập** trên thanh công cụ:
+
+1. **Xuất thiết lập…**: lưu các thông số hiện tại (kể cả chưa lưu dự án) thành một file `.air3preset`. Mặc định kèm ảnh nhân vật, giọng tham chiếu, nhạc và LUT đã chọn. File dùng container riêng của AIR3view, không cần giải nén.
+2. Chuyển file sang máy khác, chọn **Thiết lập → Nhập thiết lập…**. Xem tóm tắt, chọn **Áp dụng cho dự án hiện tại** và/hoặc **Ghi nhớ cho các dự án tiếp theo**, rồi bấm **Nhập thiết lập**.
+3. Nếu xuất không kèm tài nguyên, chọn lại đúng các file tương ứng trên máy nhận. App kiểm tra mã SHA-256 trước khi nhập. Tài nguyên được chép vào kho asset của app và đổi đường dẫn theo máy nhận.
+
+Gói gồm prompt/quy tắc/thời lượng/ngôn ngữ, hook/cảnh xen kẽ, khung hình/tốc độ/màu/lật/nền mờ, voice/nhân vật, dẫn chứng/SFX, nhạc/tiếng gốc, phụ đề, mẫu thông số/hiệu ứng theo vai trò layer, mute/tick đồng bộ track, snapping và metadata. Khóa track giữ theo dự án đích. URL, mốc chọn nguồn, nội dung cảnh, file sinh ra và timing layer giữ riêng theo dự án; đổi tốc độ có thể điều chỉnh thời lượng cảnh gốc theo cơ chế khớp footage hiện có.
+
+Kết nối API/CLI, key, cookie, đường dẫn công cụ và ổ lưu giữ theo máy nhận. Font không đóng gói; cần cài font hoặc chọn font khác nếu máy nhận chưa có. Khi đổi ngôn ngữ/giọng/nhân vật/kiểu dẫn chứng, chạy lại bước tạo nội dung tương ứng; nhập preset không tự gọi AI hoặc xuất video. Khi dự án/hàng loạt đang xử lý, chờ hoặc tạm dừng trước khi nhập.
+
+Đọc/ghi/hash file chạy nền. Trước khi nhập, cấu hình cũ được sao lưu tại `preset-backups` trong thư mục dữ liệu app. Nếu lưu thất bại, app khôi phục JSON trước khi nhập. Mỗi tài nguyên tối đa 32 MB (ảnh), 64 MB (giọng mẫu), 256 MB (nhạc), 16 MB (LUT); tổng tối đa 512 MB.
 
 ## Khởi chạy
 
@@ -160,7 +174,7 @@ Dữ liệu đợt nằm trong `%LOCALAPPDATA%\ReactionStudio\batches\<ID>`: `ba
 
 ## Dữ liệu và log
 
-Dự án/cấu hình: `%LOCALAPPDATA%\ReactionStudio` (giữ tên cũ để tương thích). Log worker nằm trong `logs/vieneu-out.log`, `logs/vieneu-err.log`. Cache model VieNeu dùng file thường trong `runtime/huggingface-regular-v1` để ONNX hoạt động cả khi Windows bật Developer Mode; có thể đổi bằng biến `REACTION_MODEL_CACHE`. Dự án chứa `project.json`, `workflow.json`, `logs/pipeline.jsonl`, media/cache. Xóa dự án qua nút trong Thư viện; dọn source/build không cần xóa AppData.
+Dự án/cấu hình: `%LOCALAPPDATA%\ReactionStudio` (giữ tên cũ để tương thích). Log worker nằm trong `logs/vieneu-out.log`, `logs/vieneu-err.log`. Cache model VieNeu dùng file thường trong `runtime/huggingface-regular-v1` để ONNX hoạt động cả khi Windows bật Developer Mode; có thể đổi bằng biến `REACTION_MODEL_CACHE`. Dự án chứa `project.json`, `workflow.json`, `logs/pipeline.jsonl`, media/cache. Xóa dự án qua nút trong Thư viện; dự án cũng được gỡ khỏi mọi phiên Xử lý hàng loạt và phạm vi xuất của phiên. Giữ lịch sử phiên dù không còn dự án; nếu phiên đang chạy, tạm dừng trước khi xóa. Xóa thất bại giữ lại mục hàng loạt để thử lại. Dọn source/build không cần xóa AppData.
 
 Khi hết dung lượng, màn hình dự án/hàng loạt hiển thị nguyên nhân tiếng Việt và hướng dẫn kiểm tra ổ chứa dự án/cache, giải phóng dung lượng rồi thử lại. Mở **Chi tiết kỹ thuật / thư mục cần kiểm tra** hoặc **Nhật ký** để xem thư mục và lỗi gốc. Hàng đợi tạm dừng khi lỗi dung lượng, không tự thử lại liên tục. Chọn ổ lưu MP4 khác không chuyển cache dự án sang ổ đó.
 
@@ -175,8 +189,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1 -SkipB
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-source.ps1
 ```
 
-- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.8-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
-- Source sạch: `dist/AIR3view-0.2.8-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
+- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.9-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
+- Source sạch: `dist/AIR3view-0.2.9-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
 - Package dùng danh sách runtime và ghi SHA256 trong `package-manifest.json`. Không sinh bản EXE dự phòng. Có file lạ ở thư mục đích thì script báo lỗi để tránh đưa nhầm vào release.
 - Giữ `Cargo.lock`. Unit test nằm trong module Rust, chỉ biên dịch khi chạy `scripts/build.cmd test --release --lib --locked`; không nằm trong EXE release.
 - `.gitignore` loại build/dist/runtime/dữ liệu local. Không commit key, cookie hay cấu hình cá nhân.

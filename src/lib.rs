@@ -22,6 +22,7 @@ pub mod export_metadata;
 pub mod input_assets;
 pub mod layer_media;
 pub mod layer_defaults;
+pub mod settings_package;
 pub mod media;
 pub mod model;
 pub mod motion;

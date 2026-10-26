@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LayerDefaults {
+    pub effects: BTreeMap<String, crate::visual_effects::Effect>,
     pub initialized: bool,
     pub free_aspect: bool,
     pub sync_parameters: Vec<bool>,
@@ -36,7 +37,8 @@ impl LayerParameters {
 }
 
 impl LayerDefaults {
-    fn key(p: &Project, c: &LayerClip) -> Option<String> {
+    pub(crate) fn key(p: &Project, c: &LayerClip) -> Option<String> {
+        if c.track==crate::timeline::MUSIC {return Some("global:10:".into());}
         let scene = p.segments.iter().find(|s| s.id == c.scene_id)?;
         // Preserve the distinct full-host and corner-review layouts. Evidence
         // slots stay separate so remembering card 1 never stacks every card on it.
@@ -49,6 +51,13 @@ impl LayerDefaults {
 
     pub fn from_project(p: &Project) -> Self {
         let mut result = p.layer_defaults.clone();
+        if let Some(comp)=&p.composition {
+            for c in &comp.clips {
+                if let Some((key,effect))=Self::key(p,c).zip(p.effects.layers.get(&c.id)) {
+                    result.effects.insert(key,effect.clone());
+                }
+            }
+        }
         result.sync_parameters = p.timeline.tracks.iter().map(|t| t.sync_parameters).collect();
         // Import existing edits from projects created before portable preferences.
         // Only differences are remembered; automatic layouts remain adaptive.

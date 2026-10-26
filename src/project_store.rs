@@ -196,6 +196,9 @@ pub fn delete(library: &Path, path: &Path, active: Option<&Project>) -> Result<u
     }
     // All absolute boundaries and the complete tree were checked above. Never
     // follow paths from project JSON to delete imported files outside this tree.
+    let data = library.parent().context("Thiếu thư mục dữ liệu thư viện")?;
+    let project_id = info.root.file_name().context("Thiếu ID dự án")?.to_string_lossy();
+    crate::batch::remove_project(data, &project_id, || {
     let manifest = fs::read(&info.path)?;
     let removal = (|| -> std::io::Result<()> {
         // Keep project.json until the data is gone, so a locked cache file
@@ -220,6 +223,7 @@ pub fn delete(library: &Path, path: &Path, active: Option<&Project>) -> Result<u
     }
     removal.context("Không xóa hết được dự án; đóng file đang mở rồi thử lại")?;
     Ok(info.bytes)
+    })
 }
 
 #[cfg(test)]

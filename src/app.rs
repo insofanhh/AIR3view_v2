@@ -48,6 +48,8 @@ mod metadata_ui;
 mod updates_ui;
 #[path="batch_ui.rs"]
 mod batch_ui;
+#[path="settings_package_ui.rs"]
+mod settings_package_ui;
 #[derive(PartialEq, Clone, Copy, Debug)]
 enum Page {
     Editor,
@@ -119,6 +121,7 @@ pub struct StudioApp {
     metadata_actual: String,
     updates: crate::updates::Updates,
     batch_view: batch_ui::BatchView,
+    presets: settings_package_ui::PresetView,
     range_source: String,
     range_start: f64,
     range_end: f64,
@@ -317,6 +320,7 @@ impl StudioApp {
             metadata_actual: String::new(),
             updates: crate::updates::Updates::new(root.join("updates.json")),
             batch_view: batch_ui::BatchView::load(&root),
+            presets: Default::default(),
             range_source: "src_1".into(),
             range_start: 0.0,
             range_end: 10.0,
@@ -332,6 +336,10 @@ impl StudioApp {
         if let Some(ms)=std::env::args().find_map(|a|a.strip_prefix("--preview-ms=").and_then(|v|v.parse().ok())) {app.timeline_view.cursor=ms;}
         if std::env::args().any(|a|a=="--layer=avatar"){app.select_timeline_layer(crate::timeline::AVATAR);}
         app.request_frame();
+        if app.capture_path.is_some() {
+            if std::env::args().any(|a|a=="--capture-preset=export") {app.presets.open=true;app.presets.export=true;}
+            if let Some(path)=std::env::args().find_map(|a|a.strip_prefix("--capture-preset-import=").map(PathBuf::from)) {app.read_preset(path);}
+        }
         app
     }
     fn read_history() -> Vec<PathBuf> {
@@ -354,7 +362,7 @@ impl StudioApp {
             let _ = self.project.save();
         }
         let mut p = Project::default();
-        ProjectDefaults::from_project(&self.project).apply(&mut p);
+        self.presets.next_defaults.take().unwrap_or_else(||ProjectDefaults::from_project(&self.project)).apply(&mut p);
         p.root = self.projects_root.join(&p.id);
         self.project = p;
         self.layers = Default::default();
@@ -405,9 +413,9 @@ impl StudioApp {
     }
     fn remember_project_defaults(&mut self) -> anyhow::Result<()> {
         let root = self.projects_root.parent().context("Thiếu thư mục cấu hình")?;
-        let defaults = ProjectDefaults::from_project(&self.project);
+        let defaults = self.presets.next_defaults.clone().unwrap_or_else(||ProjectDefaults::from_project(&self.project));
         write_json(&root.join("project-defaults.json"), &defaults)?;
-        self.project.layer_defaults = defaults.layer_defaults;
+        if self.presets.next_defaults.is_none(){self.project.layer_defaults = defaults.layer_defaults;}
         Ok(())
     }
     fn restore_job_notice(&mut self) {
@@ -576,7 +584,7 @@ impl StudioApp {
                 _ => {}
             }
         }
-        if self.dirty && !self.busy && self.last_save.elapsed() > Duration::from_secs(2) {
+        if self.dirty && !self.busy && !self.presets.open && self.last_save.elapsed() > Duration::from_secs(2) {
             self.save();
         }
     }
@@ -817,7 +825,7 @@ impl StudioApp {
                         } else { &self.project.title };
                         ui.add(egui::Label::new(RichText::new(subtitle).color(MUTED).size(12.0)).truncate());
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center).with_main_wrap(true), |ui| {
                         ui.spacing_mut().interact_size.y = 34.0;
                         if self.busy {
                             if ui.add(egui::Button::new("Hủy tác vụ").fill(Color32::from_rgb(110,36,49))).clicked() {
@@ -886,6 +894,7 @@ impl StudioApp {
                             let save = ui.button("Lưu dự án");
                             #[cfg(test)] self.hitboxes.insert("top_save".into(), save.rect);
                             if save.clicked() { self.save(); self.message("Đã lưu project.json", false); }
+                            if self.page==Page::Editor {self.preset_menu(ui);}
                             let open = ui.button("Mở dự án");
                             #[cfg(test)] self.hitboxes.insert("top_open".into(), open.rect);
                             if open.clicked() {
@@ -1756,6 +1765,7 @@ impl StudioApp {
             ui.label(info.root.to_string_lossy());
             ui.add_space(8.0);
             ui.label("Xóa vĩnh viễn video nguồn, voice, nhân vật, cache và video xuất nằm trong thư mục dự án. File đã nhập từ vị trí khác vẫn được giữ. Thao tác không thể hoàn tác.");
+            ui.label("Dự án cũng được gỡ khỏi danh sách của các phiên xử lý hàng loạt.");
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 let response = ui.button("Hủy");
@@ -1780,6 +1790,8 @@ impl StudioApp {
                         self.reset_after_project_delete();
                     }
                     self.history = project_store::list(&self.projects_root);
+                    self.library_cache.clear();
+                    self.batch_view.refresh_after_project_delete(self.projects_root.parent().unwrap());
                     self.pending_delete = None;
                     self.notice = format!(
                         "Đã xóa “{}” ({:.1} MB dữ liệu)",
@@ -2225,6 +2237,10 @@ fn worker_path(name: &str) -> PathBuf {
 }
 impl StudioApp {
     fn draw(&mut self, ctx: &egui::Context) {
+        self.poll_presets();
+        if self.presets.running && ctx.input(|i|i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
         self.poll_batch();
         self.updates.poll();
         self.advance_update(ctx);
@@ -2296,7 +2312,7 @@ impl StudioApp {
             self.timeline_view.project_id = self.project.id.clone();
         }
         if self.page == Page::New { self.page=Page::Editor; self.setup_open=true; }
-        if self.page == Page::Editor && !self.setup_open { self.timeline_shortcuts(ctx); }
+        if self.page == Page::Editor && !self.setup_open && !self.presets.open { self.timeline_shortcuts(ctx); }
         self.sidebar(ctx);
         self.topbar(ctx);
         self.bottom(ctx);
@@ -2320,6 +2336,7 @@ impl StudioApp {
         self.evidence_source_window(ctx);
         self.metadata_window(ctx);
         self.updates_window(ctx);
+        self.preset_dialog(ctx);
         if !self.busy && before_edit.id == self.project.id && !self.timeline_view.navigating_history
             && !self.layers.managed_edit
             && serde_json::to_vec(&before_edit).ok() != serde_json::to_vec(&self.project).ok() {
