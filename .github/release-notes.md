@@ -1,4 +1,13 @@
-## AIR3view 0.2.10: sửa lỗi xuất thiết lập với nhân vật 2D
+## AIR3view 0.2.11: sửa lỗi tạo hàng đợi với nhân vật 2D và giọng tham chiếu
+
+- Sửa lỗi **Không tạo được hàng đợi: Không đọc được ảnh/giọng tham chiếu** khi chọn nhân vật **2D local** nhưng cấu hình còn đường dẫn ảnh HeyGen cũ đã bị xóa. Hàng đợi chỉ sao chép tài nguyên đang dùng; nhân vật 2D không phụ thuộc ảnh HeyGen cũ.
+- Giọng tham chiếu đang bật vẫn được sao chép riêng vào từng dự án con. Bỏ đường dẫn giọng khi tắt tham chiếu và đường dẫn ảnh khi tắt nhân vật; giữ nguyên thiết lập dự án mẫu.
+- Nếu file đang dùng không đọc được, thông báo nêu rõ **giọng tham chiếu** hoặc **ảnh nhân vật HeyGen**, đường dẫn và hướng dẫn chọn lại trong **Giọng & nhân vật**. Phân biệt lỗi đọc file nguồn với lỗi lưu bản sao trong dự án.
+- Kiểm thử local: **168 kiểm thử Rust thành công, 1 bỏ qua**, Clippy sạch; tạo phiên 3 URL bằng cấu hình thực tế từng gây lỗi, đối chiếu file giọng trong các dự án con, tạo giọng thật bằng VieNeu và kiểm tra EXE đã cài khởi chạy thành công. CI tiếp tục kiểm tra updater/khôi phục, gói cài, render, TTS, avatar và Whisper trước khi công bố.
+
+**Cập nhật:** bấm **Cập nhật** trong app để tự tải, cài và mở lại; sau đó tạo lại phiên hàng loạt. Không cần upload lại giọng tham chiếu nếu file vẫn tồn tại. Dự án và cấu hình cũ được giữ nguyên. Người cài mới tải bản **windows-x64.zip**, giải nén đầy đủ rồi mở **AIR3view.exe**.
+
+### Tính năng từ 0.2.10: sửa lỗi xuất thiết lập với nhân vật 2D
 
 - Sửa lỗi **Xuất thiết lập** báo thiếu ảnh HeyGen cũ khi đang dùng nhân vật **2D local**. Nhân vật 2D có sẵn được chuyển bằng mã lựa chọn, không phụ thuộc đường dẫn ảnh của nhà cung cấp khác.
 - Bỏ các đường dẫn ảnh không được dùng khi tắt nhân vật hoặc chọn HeyGen bằng avatar ID; bỏ file giọng tham chiếu/nhạc nền khi các mục đó đang tắt. Dự án gốc giữ nguyên; tài nguyên đang bật vẫn được kiểm tra đầy đủ.

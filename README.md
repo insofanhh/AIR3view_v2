@@ -1,6 +1,6 @@
 # AIR3view
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.10. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.11. Preview, timeline và các layer nằm ngay trong app.
 
 ## Xuất / nhập thiết lập giữa các máy
 
@@ -152,6 +152,8 @@ Tác vụ có checkpoint. Sau lỗi/mở lại app, dùng **Tiếp tục bước
 
 Mỗi URL có project, timeline, media và checkpoint riêng, dùng bản chụp thiết lập lúc tạo đợt; ảnh/giọng tham chiếu được chép vào dự án con. Vùng giữ/loại nguồn cụ thể và timeline của dự án mẫu không được sao chép. Chế độ **Nhiều nguồn · một dự án** vẫn dùng để ghép nhiều URL vào một video.
 
+Hàng đợi chỉ sao chép tài nguyên đang dùng: giọng tham chiếu khi bật, ảnh local khi chọn HeyGen. Nhân vật 2D không cần ảnh HeyGen từng chọn ở dự án cũ; đường dẫn ảnh cũ bị mất không chặn việc tạo phiên. Nếu file đang dùng không đọc được, thông báo nêu rõ giọng/ảnh, đường dẫn và yêu cầu chọn lại trong **Giọng & nhân vật**. Thiết lập của dự án mẫu được giữ nguyên.
+
 App xử lý lần lượt một dự án để giới hạn RAM/VRAM. **Tạm dừng sau video hiện tại** chờ video đang chạy xong; **Dừng tác vụ hiện tại** hủy bước hiện tại và tạm dừng đợt. Dùng **Bắt đầu / tiếp tục** để tiếp tục checkpoint; **Thử lại** cho các mục lỗi. Lỗi riêng một URL không chặn URL sau; lỗi cấu hình, xác thực hoặc tài nguyên chung sẽ tạm dừng để xử lý. Lỗi mạng tạm thời được thử lại tối đa một lần sau 30 giây.
 
 **Bỏ khỏi hàng đợi** chỉ bỏ lượt chạy, giữ dữ liệu dự án. Có thể đổi thứ tự các mục đang chờ và mở dự án đã hoàn thành trong khi đợt tiếp tục. Tác vụ nặng thủ công và cài bản cập nhật bị khóa khi hàng đợi chạy. Đóng app sẽ dừng hàng đợi do phiên đó khởi chạy; mở lại và bấm tiếp tục. Không tự xuất lại các mục đã hoàn thành. Khi thử lại bước xuất, MP4 có biên nhận hợp lệ được kiểm tra rồi dùng lại.
@@ -191,8 +193,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package.ps1 -SkipB
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-source.ps1
 ```
 
-- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.10-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
-- Source sạch: `dist/AIR3view-0.2.10-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
+- Bản chạy: `dist/AIR3view/`; ZIP: `dist/AIR3view-0.2.11-windows-x64.zip`. `scripts/package.ps1 -OutputPath <thư mục mới>` cho phép đóng gói riêng khi bản cũ còn runtime local.
+- Source sạch: `dist/AIR3view-0.2.11-source.zip`, không chứa cache/build, Python, model, video dự án, cookie hoặc executable công cụ.
 - Package dùng danh sách runtime và ghi SHA256 trong `package-manifest.json`. Không sinh bản EXE dự phòng. Có file lạ ở thư mục đích thì script báo lỗi để tránh đưa nhầm vào release.
 - Giữ `Cargo.lock`. Unit test nằm trong module Rust, chỉ biên dịch khi chạy `scripts/build.cmd test --release --lib --locked`; không nằm trong EXE release.
 - `.gitignore` loại build/dist/runtime/dữ liệu local. Không commit key, cookie hay cấu hình cá nhân.

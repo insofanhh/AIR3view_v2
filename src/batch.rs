@@ -202,21 +202,21 @@ impl Batch {
             })
     }
 }
-fn snapshot_file(path: &mut String, folder: &Path) -> Result<()> {
-    if path.is_empty() {
-        return Ok(());
-    }
+fn snapshot_file(path: &mut String, folder: &Path, label: &str) -> Result<()> {
+    ensure!(!path.trim().is_empty(), "Chưa chọn file {label}. Chọn lại file trong Giọng & nhân vật trước khi tạo phiên hàng loạt.");
     let src = PathBuf::from(&*path);
-    let bytes = fs::read(&src).context("Không đọc được ảnh/giọng tham chiếu")?;
+    let bytes = fs::read(&src).with_context(|| format!(
+        "Không đọc được {label}: {}. Chọn lại file trong Giọng & nhân vật trước khi tạo phiên hàng loạt.", src.display()
+    ))?;
     let name = format!(
         "{}.{}",
         media::hash(&bytes),
         src.extension().and_then(|v| v.to_str()).unwrap_or("bin")
     );
-    fs::create_dir_all(folder)?;
+    fs::create_dir_all(folder).with_context(|| format!("Không tạo được thư mục lưu {label}: {}", folder.display()))?;
     let target = folder.join(name);
     if !target.is_file() {
-        fs::write(&target, bytes)?;
+        fs::write(&target, bytes).with_context(|| format!("Không lưu được bản sao {label}: {}", target.display()))?;
     }
     *path = target.to_string_lossy().into_owned();
     Ok(())
@@ -265,6 +265,17 @@ pub fn create(
     if defaults.production.is_none() {
         defaults.production = Some(ProductionSettings::from_settings(settings));
     }
+    // Keep the editor's original choices intact. Only active inputs belong in
+    // the batch template and its independent child projects. Built-in 2D rigs
+    // never consume the old HeyGen photo retained by earlier projects.
+    if let Some(prod) = &mut defaults.production {
+        if !prod.voice_reference_enabled {
+            prod.voice_reference_path.clear();
+        }
+        if !prod.avatar_enabled || prod.avatar_provider != "heygen" {
+            prod.avatar_image_path.clear();
+        }
+    }
     let mut projects = vec![];
     for (index, url) in list.urls.into_iter().enumerate() {
         let mut p = Project::default();
@@ -280,10 +291,10 @@ pub fn create(
         if let Some(prod) = &mut p.production {
             let assets = p.root.join("inputs");
             if prod.voice_reference_enabled {
-                snapshot_file(&mut prod.voice_reference_path, &assets)?;
+                snapshot_file(&mut prod.voice_reference_path, &assets, "giọng tham chiếu")?;
             }
-            if prod.avatar_enabled && !prod.avatar_image_path.is_empty() {
-                snapshot_file(&mut prod.avatar_image_path, &assets)?;
+            if prod.avatar_enabled && prod.avatar_provider == "heygen" && !prod.avatar_image_path.is_empty() {
+                snapshot_file(&mut prod.avatar_image_path, &assets, "ảnh nhân vật HeyGen")?;
             }
         }
         workflow::preflight(&p, &workflow::effective_settings(&p, settings))?;
@@ -1309,6 +1320,122 @@ mod tests {
     }
 
     #[test]
+    fn batch_2d_and_disabled_avatar_ignore_stale_images_and_keep_voice_snapshots() {
+        for (provider, character, enabled) in [
+            ("cartoon2d", "portrait", true),
+            ("cartoon2d", "panda", true),
+            ("heygen", "portrait", false),
+        ] {
+            let (temp, mut p, s) = setup();
+            let voice = temp.path().join("voice.wav");
+            fs::write(&voice, b"reference-audio-fixture").unwrap();
+            let prod = p.production.as_mut().unwrap();
+            prod.avatar_enabled = enabled;
+            prod.avatar_provider = provider.into();
+            prod.cartoon_character = character.into();
+            prod.avatar_image_path = temp.path().join("deleted-project/photo.jpg").to_string_lossy().into_owned();
+            prod.voice_reference_enabled = true;
+            prod.voice_reference_path = voice.to_string_lossy().into_owned();
+            let before = serde_json::to_vec(&p).unwrap();
+            let b = create(temp.path(), "Active inputs", URLS, &p, &s, false, None).unwrap();
+            assert_eq!(b.items.len(), 3);
+            assert_eq!(serde_json::to_vec(&p).unwrap(), before);
+            fs::remove_file(voice).unwrap();
+            let mut snapshots = std::collections::HashSet::new();
+            for item in &b.items {
+                let child = Project::load(&project_path(temp.path(), item).unwrap()).unwrap();
+                let prod = child.production.as_ref().unwrap();
+                assert!(prod.avatar_image_path.is_empty());
+                assert_eq!(prod.avatar_provider, provider);
+                assert_eq!(prod.cartoon_character, character);
+                assert!(prod.voice_reference_enabled);
+                assert_eq!(fs::read(&prod.voice_reference_path).unwrap(), b"reference-audio-fixture");
+                assert!(Path::new(&prod.voice_reference_path).starts_with(child.root.join("inputs")));
+                assert!(snapshots.insert(prod.voice_reference_path.clone()));
+                workflow::preflight(&child, &workflow::effective_settings(&child, &s)).unwrap();
+            }
+            let defaults = ProjectDefaults::load(&root(temp.path(), &b.id).unwrap().join("template.json")).unwrap();
+            assert!(defaults.production.unwrap().avatar_image_path.is_empty());
+        }
+    }
+
+    #[test]
+    fn batch_heygen_preserves_local_images_and_remote_avatar_choices() {
+        let (temp, mut p, mut s) = setup();
+        let photo = temp.path().join("original.jpg");
+        fs::write(&photo, b"heygen-photo-fixture").unwrap();
+        let prod = p.production.as_mut().unwrap();
+        prod.avatar_enabled = true;
+        prod.avatar_provider = "heygen".into();
+        prod.avatar_image_path = photo.to_string_lossy().into_owned();
+        prod.voice_reference_enabled = false;
+        prod.voice_reference_path = temp.path().join("missing-voice.wav").to_string_lossy().into_owned();
+        s.heygen_key_env = format!("AIR3VIEW_TEST_{}", uuid::Uuid::new_v4().simple());
+        std::env::set_var(&s.heygen_key_env, "test-only");
+        let result = create(temp.path(), "Local photo", URLS, &p, &s, false, None);
+        std::env::remove_var(&s.heygen_key_env);
+        let b = result.unwrap();
+        fs::remove_file(photo).unwrap();
+        for item in &b.items {
+            let child = Project::load(&project_path(temp.path(), item).unwrap()).unwrap();
+            let prod = child.production.unwrap();
+            assert_eq!(fs::read(prod.avatar_image_path).unwrap(), b"heygen-photo-fixture");
+            assert!(!prod.voice_reference_enabled && prod.voice_reference_path.is_empty());
+        }
+        for (id, url) in [("avatar-look", ""), ("", "https://example.com/portrait.jpg")] {
+            let prod = p.production.as_mut().unwrap();
+            prod.avatar_image_path.clear();
+            prod.avatar_id = id.into();
+            prod.avatar_image_url = url.into();
+            std::env::set_var(&s.heygen_key_env, "test-only");
+            let result = create(temp.path(), "Remote avatar", URLS, &p, &s, false, None);
+            std::env::remove_var(&s.heygen_key_env);
+            let b = result.unwrap();
+            let child = Project::load(&project_path(temp.path(), &b.items[0]).unwrap()).unwrap();
+            let prod = child.production.unwrap();
+            assert_eq!(prod.avatar_id, id);
+            assert_eq!(prod.avatar_image_url, url);
+            assert!(prod.avatar_image_path.is_empty());
+        }
+    }
+
+    #[test]
+    fn batch_missing_active_inputs_report_kind_path_and_recovery() {
+        let (temp, mut p, mut s) = setup();
+        let prod = p.production.as_mut().unwrap();
+        prod.voice_reference_enabled = true;
+        let voice = temp.path().join("missing-voice.wav");
+        prod.voice_reference_path = voice.to_string_lossy().into_owned();
+        let error = create(temp.path(), "Missing voice", URLS, &p, &s, false, None).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("giọng tham chiếu") && message.contains(&*voice.to_string_lossy()), "{message}");
+        assert!(message.contains("Giọng & nhân vật"), "{message}");
+        assert!(list(temp.path()).is_empty());
+
+        let prod = p.production.as_mut().unwrap();
+        prod.voice_reference_path.clear();
+        let message = format!("{:#}", create(temp.path(), "Empty voice", URLS, &p, &s, false, None).unwrap_err());
+        assert!(message.contains("giọng tham chiếu") && message.contains("Giọng & nhân vật"), "{message}");
+
+        let prod = p.production.as_mut().unwrap();
+        prod.voice_reference_enabled = false;
+        prod.voice_reference_path = voice.to_string_lossy().into_owned();
+        prod.avatar_enabled = true;
+        prod.avatar_provider = "heygen".into();
+        let photo = temp.path().join("deleted-project/photo.jpg");
+        prod.avatar_image_path = photo.to_string_lossy().into_owned();
+        // Unique, synthetic credential used only by the read-only preflight.
+        s.heygen_key_env = format!("AIR3VIEW_TEST_{}", uuid::Uuid::new_v4().simple());
+        std::env::set_var(&s.heygen_key_env, "test-only");
+        let result = create(temp.path(), "Missing photo", URLS, &p, &s, false, None);
+        std::env::remove_var(&s.heygen_key_env);
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(message.contains("ảnh nhân vật HeyGen") && message.contains(&*photo.to_string_lossy()), "{message}");
+        assert!(message.contains("Giọng & nhân vật"), "{message}");
+        assert!(list(temp.path()).is_empty());
+    }
+
+    #[test]
     fn batch_creation_isolates_sources_snapshots_and_does_not_inherit_timeline() {
         let (temp, mut p, mut s) = setup();
         let source_base=temp.path().join("YouTube originals");fs::create_dir(&source_base).unwrap();
@@ -1329,6 +1456,10 @@ mod tests {
         prod.avatar_enabled = true;
         prod.avatar_provider = "cartoon2d".into();
         prod.avatar_image_path = photo.to_string_lossy().into_owned();
+        let voice = temp.path().join("reference.wav");
+        fs::write(&voice, b"reference-audio-fixture").unwrap();
+        prod.voice_reference_enabled = true;
+        prod.voice_reference_path = voice.to_string_lossy().into_owned();
         let b = create(
             temp.path(),
             "Three isolated sources",
@@ -1349,6 +1480,7 @@ mod tests {
             "Creating a batch must not mutate its source project"
         );
         fs::remove_file(photo).unwrap();
+        fs::remove_file(voice).unwrap();
         let mut ids = std::collections::HashSet::new();
         for item in &b.items {
             let mut child = Project::load(&project_path(temp.path(), item).unwrap()).unwrap();
@@ -1365,9 +1497,10 @@ mod tests {
             assert_eq!(child.rules.max_seconds, 240);
             assert_eq!(child.rules.language, "en");
             assert!(
-                Path::new(&child.production.as_ref().unwrap().avatar_image_path).is_file(),
-                "Removing the original portrait must not break queued projects"
+                Path::new(&child.production.as_ref().unwrap().voice_reference_path).is_file(),
+                "Removing the original voice must not break queued projects"
             );
+            assert!(child.production.as_ref().unwrap().avatar_image_path.is_empty());
             child.rules.language = "vi".into();
             child.save().unwrap();
         }
