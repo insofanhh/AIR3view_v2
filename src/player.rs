@@ -18,6 +18,13 @@ use std::{
     time::Duration,
 };
 
+fn output_stream()->anyhow::Result<(rodio::OutputStream,rodio::OutputStreamHandle)> {
+    // Unit tests verify decoded samples and exported mixes. They must not open
+    // the host sound card: hosted Windows runners may have no stable endpoint.
+    #[cfg(test)] {anyhow::bail!("Physical audio devices are disabled in unit tests")}
+    #[cfg(not(test))] {Ok(rodio::OutputStream::try_default()?)}
+}
+
 pub enum PlayerEvent {
     Backgrounds { generation:u64, count:usize },
     Layers { generation:u64, ms:u64, frames:Vec<(String,image::RgbaImage)> },
@@ -88,7 +95,7 @@ impl Player {
         let cancel=self.audition_cancel.clone();let tx=self.tx.clone();let generation=self.generation;
         thread::spawn(move||{
             let result=(||->anyhow::Result<()>{
-                let (_stream,handle)=rodio::OutputStream::try_default().context("Không mở được thiết bị âm thanh để nghe thử")?;
+                let (_stream,handle)=output_stream().context("Không mở được thiết bị âm thanh để nghe thử")?;
                 let sink=rodio::Sink::try_new(&handle)?;sink.set_volume(gain.clamp(0.,2.));
                 sink.append(rodio::Decoder::new(BufReader::new(std::fs::File::open(path)?))?);
                 while !cancel.load(Ordering::Relaxed)&&!sink.empty(){thread::sleep(Duration::from_millis(10));}
@@ -225,7 +232,7 @@ fn composition_worker(p:&crate::model::Project,s:&Settings,ms:u64,play:bool,canc
     let mut retired_sfx=std::collections::BTreeSet::new();
     let mut stills=std::collections::BTreeMap::<String,image::RgbaImage>::new();
     let mut delivered=std::collections::BTreeSet::new();
-    let audio_stream=if play {rodio::OutputStream::try_default().ok()}else{None};
+    let audio_stream=if play {output_stream().ok()}else{None};
     let mut sinks=std::collections::BTreeMap::<String,rodio::Sink>::new();
     let mut clock:Option<std::time::Instant>=None;let mut index=0u64;
     while !cancel.load(Ordering::Relaxed) {
@@ -367,7 +374,7 @@ fn play_worker(
     let start = format!("{:.3}", ms as f64 / 1000.0);
     let length = format!("{:.3}", end_ms.saturating_sub(ms).max(1) as f64 / 1000.0);
     let path = path.to_string_lossy();
-    let audio_stream = rodio::OutputStream::try_default().ok();
+    let audio_stream = output_stream().ok();
     let sink = audio_stream
         .as_ref()
         .and_then(|(_, h)| rodio::Sink::try_new(h).ok());
@@ -432,6 +439,10 @@ fn play_worker(
 mod original_audio_tests {
     use super::*;
     use crate::{model::*,timeline};
+    #[test]
+    fn headless_preview_does_not_open_physical_audio_devices() {
+        assert!(output_stream().is_err());
+    }
     #[test]
     fn live_sound_style_swap_preserves_voice_and_retires_finished_effects() {
         let mut p=Project{segments:vec![Segment{id:"host".into(),kind:"host".into(),audio:Some("voice.wav".into()),duration_ms:3000,graphics:vec![GraphicCue{start_ms:0,end_ms:1000,..Default::default()},GraphicCue{start_ms:2000,end_ms:2900,..Default::default()}],..Default::default()}],..Default::default()};

@@ -25,7 +25,7 @@ jobs:
       - name: Rust tests and Clippy
         shell: powershell
         run: |
-          ./scripts/build.cmd test --release --lib --locked
+          ./scripts/build.cmd test --release --lib --locked -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/build.cmd clippy --release --all-targets --locked -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

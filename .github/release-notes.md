@@ -8,7 +8,7 @@
 - Cập nhật prompt True Crime / Bodycam, hướng dẫn lời nói tiếng Anh, đồng bộ cảm xúc và giới hạn thẻ. Quy tắc văn phong được xử lý theo hướng hướng dẫn; các kiểm tra dữ kiện, thời lượng và cấu trúc vẫn được giữ.
 - Bổ sung phục hồi thời lượng thiếu và các kiểm thử hồi quy cho pipeline, dự án cũ, preview và MP4.
 
-**Kiểm thử trên máy phát triển:** 223 kiểm thử Rust đạt, 2 bài kiểm thử ngoài bỏ qua trong lượt chạy thường; kiểm thử riêng SFX trên 8 dự án, 96 trường hợp chọn âm theo nhóm và 16 đoạn MP4 thử nghiệm. Đã đối chiếu âm thanh, cache hình, UI 1080×720 / 1440×900 và kiểm thử cập nhật/khôi phục. GitHub Actions tiếp tục chạy toàn bộ bộ kiểm thử, Clippy, updater, đóng gói, TTS, avatar và Whisper trước khi công bố.
+**Kiểm thử trên máy phát triển:** kiểm thử riêng SFX trên 8 dự án, 96 trường hợp chọn âm theo nhóm và 16 đoạn MP4 thử nghiệm. Đã đối chiếu âm thanh, cache hình, UI 1080×720 / 1440×900 và kiểm thử cập nhật/khôi phục. Unit test preview không mở thiết bị âm thanh vật lý của máy chạy test; âm thanh được kiểm tra từ mẫu PCM và MP4. GitHub Actions chạy toàn bộ bộ kiểm thử theo thứ tự, Clippy, updater, đóng gói, TTS, avatar và Whisper trước khi công bố; hai bài kiểm thử ngoài chỉ chạy khi được yêu cầu riêng.
 
 **Cập nhật:** bấm **Cập nhật** trong app để tự tải, cài và mở lại. Người cài mới tải **AIR3view-0.2.12-windows-x64.zip**, giải nén đầy đủ rồi mở **AIR3view.exe**. Dữ liệu và cấu hình giữ theo máy; key, cookie và dữ liệu dự án không nằm trong gói phát hành.
 
