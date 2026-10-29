@@ -34,9 +34,13 @@ try {
         }
         $taskProjectPath=Join-Path $taskScratch 'project.json'
         [IO.File]::WriteAllText($taskProjectPath,($taskProject | ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false))
-        $taskOutput=Join-Path $taskScratch ('output-' + $taskPortrait + '.mp4')
+        $taskOutputFolder=Join-Path $taskScratch ('output-' + $taskPortrait)
+        New-Item -ItemType Directory -Path $taskOutputFolder | Out-Null
+        $taskOutput=Join-Path $taskOutputFolder 'final.mp4'
         & $taskCli render $taskProjectPath $taskOutput
         if ($LASTEXITCODE -ne 0) { throw 'Packaged render failed' }
+        $taskExported=@(Get-ChildItem -LiteralPath $taskOutputFolder -Force)
+        if ($taskExported.Count -ne 1 -or $taskExported[0].Name -ne 'final.mp4') { throw 'Export must contain only final.mp4' }
         & $taskFfmpeg -v error -i $taskOutput -f null -
         if ($LASTEXITCODE -ne 0) { throw 'Full video decode failed' }
         $taskProbe=& $taskFfprobe -v error -show_entries 'stream=codec_name,codec_type,width,height:format=duration' -of json $taskOutput | ConvertFrom-Json

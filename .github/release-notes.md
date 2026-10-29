@@ -1,4 +1,15 @@
-## AIR3view 0.2.12: SFX rõ ràng hơn, dẫn chứng và phục hồi dự án
+## AIR3view 0.2.13: chỉ xuất video final.mp4
+
+- Xuất riêng hoặc hàng loạt chỉ lưu **final.mp4** trong thư mục đích của mỗi dự án. Không xuất thêm file phụ đề ASS/SRT/VTT, JSON nguồn/dẫn chứng hoặc bản video `final.previous-…mp4`.
+- Dữ liệu tiếp tục phiên hàng loạt và video tạm nằm trong cache dự án. Phụ đề, giọng, ảnh dẫn chứng và SFX vẫn được ghép đầy đủ vào video.
+- Xuất lại thay file bằng thao tác công bố an toàn: hủy tác vụ, lỗi đọc hoặc file đích bị khóa không làm mất MP4 cũ. Vẫn yêu cầu xác nhận trước khi xuất lại trong hàng loạt.
+- Không tự xóa các file phụ đã xuất từ phiên bản trước.
+
+**Kiểm thử:** 18 bài kiểm thử liên quan đã qua trên máy phát triển, gồm xuất riêng/hàng loạt, tiếp tục phiên, xuất lại, giữ file khi lỗi và kiểm tra hình/tiếng. Gói cài đã kiểm tra 60 hash, khởi chạy native và giải mã MP4 9:16 / 16:9 thành công. GitHub Actions chạy toàn bộ kiểm thử, Clippy, updater, gói cài, TTS, avatar và Whisper trước khi công bố.
+
+**Cập nhật:** bấm **Cập nhật** trong app. Người cài mới tải **AIR3view-0.2.13-windows-x64.zip**, giải nén đầy đủ rồi mở **AIR3view.exe**. Dự án và cấu hình được giữ theo máy.
+
+## Tính năng từ 0.2.12: SFX rõ ràng hơn, dẫn chứng và phục hồi dự án
 
 - Tách rõ âm thanh **Thẻ thông tin / số liệu** và **Ảnh dẫn chứng**; thêm **Nghe**, **Đồng bộ loại SFX** và **Áp dụng lại cho nhóm**. Nút SFX nằm đầu thanh timeline để dễ tìm ở cửa sổ nhỏ.
 - Thay bộ âm thanh Whoosh bằng **Paper tear**, Ting bằng **Appear**, Pop bằng bản mới đã cắt khoảng lặng. Cập nhật thư viện âm cho dự án cũ, giữ file âm riêng và các chỉnh sửa hình/giọng. MP4 đã xuất cần xuất lại.

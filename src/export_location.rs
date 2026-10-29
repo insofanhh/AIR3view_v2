@@ -66,7 +66,7 @@ impl ExportLocation {
         let folder = self.folder().context("Chưa chọn thư mục lưu")?;
         ensure!(folder.is_absolute() && folder.is_dir(), "Ổ đĩa/thư mục lưu {} không khả dụng. Kết nối lại ổ đĩa hoặc chọn Nơi lưu → Đổi thư mục.", folder.display());
         let id = uuid::Uuid::parse_str(&project.id).context("ID dự án không hợp lệ")?;
-        // Keep sidecars and equal filenames from different projects separate.
+        // Keep equal video filenames from different projects separate.
         Ok(Some(
             folder.join(format!("AIR3view-{id}")).join("final.mp4"),
         ))

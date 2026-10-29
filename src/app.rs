@@ -3233,7 +3233,9 @@ mod ui_tests {
         }
         assert!(expected.is_file());
         assert!(!app.project.root.join("export/final.mp4").exists());
-        assert!(expected.parent().unwrap().join("sources.json").is_file());
+        let exported: Vec<_> = fs::read_dir(expected.parent().unwrap()).unwrap()
+            .map(|entry| entry.unwrap().file_name()).collect();
+        assert_eq!(exported, vec![std::ffi::OsString::from("final.mp4")]);
         let probe = media::probe(&settings, &expected, &cancel).unwrap();
         assert_eq!((probe.width, probe.height), (360, 640));
         assert!(probe.duration_ms.abs_diff(2000) < 150);

@@ -264,6 +264,28 @@ pub fn apply_to_mp4(p:&Project,s:&Settings,input:&Path,output:&Path,cancel:&Canc
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn publish_replaces_only_final_and_preserves_it_on_failure() {
+        let temp=tempfile::tempdir().unwrap();
+        let destination=temp.path().join("output");fs::create_dir(&destination).unwrap();
+        let output=destination.join("final.mp4");let pending=temp.path().join("pending.mp4");
+        fs::write(&output,b"old video").unwrap();fs::write(&pending,b"new video").unwrap();
+        let cancelled=process::cancel_token();cancelled.store(true,std::sync::atomic::Ordering::Relaxed);
+        assert!(publish(&pending,&output,&cancelled).is_err());
+        assert_eq!(fs::read(&output).unwrap(),b"old video");
+        let cancel=process::cancel_token();
+        assert!(publish(&temp.path().join("missing.mp4"),&output,&cancel).is_err());
+        assert_eq!(fs::read(&output).unwrap(),b"old video");
+        #[cfg(windows)] {
+            use std::os::windows::fs::OpenOptionsExt;
+            let locked=fs::OpenOptions::new().read(true).share_mode(0).open(&output).unwrap();
+            assert!(publish(&pending,&output,&cancel).is_err());drop(locked);
+            assert_eq!(fs::read(&output).unwrap(),b"old video");
+        }
+        publish(&pending,&output,&cancel).unwrap();
+        assert_eq!(fs::read(&output).unwrap(),b"new video");
+        let files:Vec<_>=fs::read_dir(&destination).unwrap().map(|e|e.unwrap().file_name()).collect();
+        assert_eq!(files,vec![std::ffi::OsString::from("final.mp4")]);
+    }
     #[test] fn dates_validation_and_old_project_defaults() {
         assert_eq!(utc(0),"1970-01-01T00:00:00Z");assert_eq!(utc(1792744710),"2026-10-23T08:38:30Z");
         for s in ["2024-02-29T12:00:00Z","2026-10-23T08:00:00Z"] {validate_time(s).unwrap();}

@@ -615,16 +615,5 @@ pub fn render<F: FnMut(usize, usize)>(
     }
     crate::export_metadata::finish(p,settings,&work.join("final.pending.mp4"),output,metadata,(mux_clock.elapsed().as_millis(),"legacy_render"),cancel)?;
     fs::remove_file(work.join("final.pending.mp4"))?;
-    let attribution: Vec<_> = p
-        .sources
-        .iter()
-        .map(|s| serde_json::json!({"source_id":s.id,"url":s.url,"title":s.title}))
-        .collect();
-    let destination = output.parent().unwrap_or(&work);
-    if destination != work {
-        subtitle::write(p, destination)?;
-        crate::motion::write(p, destination)?;
-    }
-    write_json(&destination.join("sources.json"), &attribution)?;
     Ok(())
 }

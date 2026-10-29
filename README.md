@@ -7,7 +7,7 @@
 - Đường dẫn giọng cũ chỉ được phục hồi khi tìm thấy bản có đúng nội dung/hash. Nếu không tìm thấy, chọn lại file trong **Giọng & nhân vật**. Tool kiểm tra trước khi tạo dự án con và dọn phần tạo dở khi tạo phiên thất bại.
 - Xóa dự án bị chặn nếu dự án khác hoặc thiết lập cũ vẫn dùng giọng/ảnh trong thư mục đó. Lưu lại thiết lập để pin vào kho chung, hoặc chuyển tài nguyên của dự án phụ thuộc trước khi xóa.
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.12. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.13. Preview, timeline và các layer nằm ngay trong app.
 
 ## Âm thanh thẻ và ảnh dẫn chứng
 
@@ -68,6 +68,8 @@ App dùng lại VieNeu đang chạy nếu API hỗ trợ giọng tham chiếu v�
 - `release.json` ghi version/tag/commit/thời gian build; `package-manifest.json` chứa hash các file runtime. Release kèm `SHA256SUMS.txt` cho ZIP. Bản đầu dùng tag theo Cargo, những lần tiếp theo dùng hậu tố `-build.<số workflow>`.
 
 ## Nơi lưu video nguồn YouTube
+
+Xuất MP4 (riêng lẻ hoặc hàng loạt) chỉ lưu `final.mp4` vào thư mục đích của từng dự án. Phụ đề đã ghép trong video; dữ liệu phụ và cache phục vụ biên tập được giữ trong dự án.
 
 Trong **Nơi lưu / metadata → Thư mục video nguồn YouTube → Đổi thư mục video nguồn…**, chọn ổ/thư mục muốn tải video gốc về. App ghi nhớ ngay cho dự án sau và các video hàng loạt tiếp theo. Mỗi dự án lưu vào `<thư mục đã chọn>/AIR3view-<ID>/sources/`, gồm video gốc và dữ liệu tải đi kèm. **Dùng thư mục dự án** trở về mặc định `<dự án>/sources/`.
 

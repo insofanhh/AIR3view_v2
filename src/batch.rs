@@ -940,7 +940,9 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
         if item.force_export {
             ensure!(ExportFile::read(&output)? == item.export_existing, "MP4 đích đã xuất hiện hoặc thay đổi sau khi kiểm tra: {}. Bấm Xuất và xác nhận xuất lại.", output.display());
         }
-        let receipt = outdir.join("batch-export.json");
+        let export_work = p.root.join("cache/batch-export");
+        fs::create_dir_all(&export_work)?;
+        let receipt = export_work.join(format!("{}.json", media::hash(output.to_string_lossy().as_bytes())));
         let key = receipt_key(&p);
         if !item.force_export && output.is_file()
             && fs::read(&receipt)
@@ -960,7 +962,9 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
             p.save()?;
             return Ok(Some(output));
         }
-        let pending = outdir.join("final.partial.mp4");
+        // Keep staging and resume data private; only the verified MP4 is published.
+        let staging = tempfile::Builder::new().prefix("pending-").tempdir_in(&export_work)?;
+        let pending = staging.path().join("final.mp4");
         let effective = workflow::effective_settings(&p, &settings);
         let tx_export = tx.clone();
         media::render(&p, &effective, &pending, &cancel, |i, n| {
@@ -980,18 +984,9 @@ pub fn run_item(data: &Path, id: &str, item_id: &str) -> Result<()> {
         );
         process::check_cancel(&cancel)?;
         if item.force_export {
-            ensure!(ExportFile::read(&output)? == item.export_existing, "MP4 đích đã thay đổi khi đang xuất: {}. Bản mới nằm ở final.partial.mp4; bấm Xuất để xác nhận lại.", output.display());
+            ensure!(ExportFile::read(&output)? == item.export_existing, "MP4 đích đã thay đổi khi đang xuất: {}. File hiện tại được giữ nguyên; bấm Xuất để xác nhận lại.", output.display());
         }
-        if output.exists() {
-            let backup = outdir.join(format!("final.previous-{}-{}.mp4", now(), uuid::Uuid::new_v4()));
-            fs::rename(&output, &backup).with_context(||format!("Không thay được MP4 cũ: {}. Đóng trình phát video đang mở file rồi thử lại.", output.display()))?;
-            if let Err(e) = fs::rename(&pending, &output) {
-                let _ = fs::rename(&backup, &output);
-                return Err(e).context("Không lưu được MP4 mới; đã thử khôi phục MP4 cũ");
-            }
-        } else {
-            fs::rename(&pending, &output)?;
-        }
+        crate::export_metadata::publish(&pending, &output, &cancel)?;
         write_json(&receipt, &serde_json::json!({"key":key,"created_at":now()}))?;
         p.rendered = Some(output.clone());
         p.save()?;
@@ -1755,6 +1750,12 @@ mod tests {
             serde_json::from_slice(&fs::read(folder.join("outcome.json")).unwrap()).unwrap();
         assert!(outcome.ok, "{}", outcome.error);
         let output = outcome.output.unwrap();
+        let assert_video_only = || {
+            let files: Vec<_> = fs::read_dir(output.parent().unwrap()).unwrap()
+                .map(|entry| entry.unwrap().file_name()).collect();
+            assert_eq!(files, vec![std::ffi::OsString::from("final.mp4")]);
+        };
+        assert_video_only();
         let before = fs::metadata(&output).unwrap().modified().unwrap();
         run_item(temp.path(), &b.id, &item.id).unwrap();
         assert_eq!(
@@ -1771,7 +1772,7 @@ mod tests {
         let forced: Outcome = serde_json::from_slice(&fs::read(folder.join("outcome.json")).unwrap()).unwrap();
         assert!(forced.ok, "{}", forced.error);
         assert_ne!(before, fs::metadata(&output).unwrap().modified().unwrap());
-        assert!(fs::read_dir(output.parent().unwrap()).unwrap().flatten().any(|e|e.file_name().to_string_lossy().starts_with("final.previous-")));
+        assert_video_only();
     }
     fn export_fixture(data: &Path, item: &Item) {
         let path = project_path(data, item).unwrap();

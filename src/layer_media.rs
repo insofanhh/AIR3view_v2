@@ -240,13 +240,6 @@ fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel
     anyhow::ensure!((probe.width,probe.height)==p.output.dimensions()&&probe.duration_ms.abs_diff(end)<=500,"Output composition sai kích thước/thời lượng");
     crate::export_metadata::finish(p,s,&pending,output,metadata,(mux_clock.elapsed().as_millis(),"render"),cancel)?;
     fs::remove_file(pending)?;fs::remove_file(wav)?;
-    if let Some(parent)=output.parent(){
-        crate::subtitle::write(p,parent)?;
-        let sources:Vec<_>=p.sources.iter().map(|s|serde_json::json!({"source_id":s.id,"url":s.url,"title":s.title})).collect();
-        write_json(&parent.join("sources.json"),&sources)?;
-        let evidence:Vec<_>=p.segments.iter().map(|s|serde_json::json!({"scene_id":s.id,"items":s.evidence_items})).collect();
-        write_json(&parent.join("evidence-sources.json"),&evidence)?;
-    }
     report.mux_ms=mux_clock.elapsed().as_millis();progress(total,total);
     Ok(())
 }
