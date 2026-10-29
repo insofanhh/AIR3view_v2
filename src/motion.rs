@@ -19,7 +19,7 @@ fn metrics_context(font: &str) -> egui::Context {
 }
 
 fn fit_text(ctx: &egui::Context, text: &str, max_size: f64, width: f64, height: f64) -> (String, f64) {
-    let text = subtitle::safe(text);
+    let text = text.lines().map(subtitle::safe).collect::<Vec<_>>().join("\n");
     let mut size = max_size;
     loop {
         let galley = ctx.fonts(|fonts| fonts.layout(text.clone(), FontId::proportional(size as f32), Color32::BLACK, width as f32));
@@ -79,7 +79,9 @@ pub fn write(p: &Project, folder: &Path) -> Result<bool> {
                 &format!("{{\\an7{movement}\\p1\\c&HFFFFFF&\\bord0\\shad2}}{box_shape}{{\\p0}}"),
             ));
             let text_y = top + 24.0 * scale;
-            let (label, label_size) = fit_text(metrics.as_ref().unwrap(), &cue.label, 38.0*scale, cw*0.88, 55.0*scale);
+            let strict=crate::us_editorial::enabled(&p.rules);
+            let label_text=if strict{crate::us_editorial::card_text(&cue.label)}else{cue.label.clone()};
+            let (label, label_size) = fit_text(metrics.as_ref().unwrap(), &label_text, 38.0*scale, cw*0.88, 55.0*scale);
             let label_tags = format!("\\an8\\move({center:.1},{:.1},{center:.1},{text_y:.1},0,{transition})\\fad({transition},{transition})\\fs{label_size:.1}\\c&H463320&", text_y+25.0*scale);
             ass.push_str(&event(
                 1,
@@ -93,7 +95,11 @@ pub fn write(p: &Project, folder: &Path) -> Result<bool> {
             } else {
                 &cue.value
             };
-            let (fitted_value, value_size) = fit_text(metrics.as_ref().unwrap(), value, 90.0*scale, cw*0.88, 105.0*scale);
+            let value_text=if strict{crate::us_editorial::card_text(value)}else{value.into()};
+            let (fitted_value, value_size) = fit_text(metrics.as_ref().unwrap(), &value_text, 90.0*scale, cw*0.88, 105.0*scale);
+            if strict {
+                anyhow::ensure!(label_size>=20.*scale && value_size>=20.*scale,"Card không đủ chỗ ở kích thước đọc được; rút chữ hoặc chia card, không cắt chữ");
+            }
             let value_tags = format!("\\an8\\pos({center:.1},{value_y:.1})\\fs{value_size:.1}\\c&H3B55E8&\\fscx80\\fscy80\\t(0,{transition},\\fscx100\\fscy100)\\fad({transition},{transition})");
             // Count-up is only for simple integer values; dates and formatted numbers stay exact.
             if cue.kind == "number"
@@ -142,6 +148,22 @@ pub fn write(p: &Project, folder: &Path) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn us_card_lines_fit_real_fonts_in_portrait_and_landscape() {
+        let tmp=tempfile::tempdir().unwrap();let ctx=metrics_context("Segoe UI");
+        for portrait in [true,false] {
+            let mut p=Project::default();crate::us_editorial::apply(&mut p.rules);
+            p.output.portrait=portrait;p.output.resolution=720;
+            let value=crate::us_editorial::card_text("- DOMESTIC BATTERY\n- RESISTING ARREST\n- HELD IN COUNTY JAIL");
+            let (w,h)=p.output.dimensions();let scale=w.min(h) as f64/1080.;let cw=(w as f64*0.88).min(960.*scale);
+            let (text,size)=fit_text(&ctx,&value,90.*scale,cw*0.88,105.*scale);
+            assert!(size>=20.*scale);assert!(text.contains("\\N"));
+            let galley=ctx.fonts(|f|f.layout(text.replace("\\N","\n"),FontId::proportional(size as f32),Color32::BLACK,(cw*0.88) as f32));
+            assert!(galley.size().y<=105.*scale as f32+0.5);
+            p.segments.push(crate::model::Segment{duration_ms:10000,graphics:vec![crate::model::GraphicCue{label:"CHARGES".into(),value,start_ms:0,end_ms:5000,..Default::default()}],..Default::default()});
+            write(&p,tmp.path()).unwrap();
+        }
+    }
     #[test]
     fn long_vietnamese_cards_wrap_and_fit_inside_the_card() {
         let ctx = metrics_context("Segoe UI");

@@ -144,10 +144,12 @@ pub fn inspect(library: &Path, path: &Path) -> Result<DeleteInfo> {
 }
 
 pub fn uses_directory(project: &Project, root: &Path) -> bool {
+    if project.production.as_ref().is_some_and(|p|production_uses(p,root)) {return true;}
+    if project.composition.as_ref().is_some_and(|c|c.clips.iter().any(|c|c.media.as_ref().into_iter().chain(c.proxy.as_ref()).any(|p|within(p,root)))) {return true;}
     let paths = project
         .sources
         .iter()
-        .flat_map(|source| [&source.path, &source.proxy])
+        .flat_map(|source| [&source.path, &source.proxy, &source.normalized])
         .chain(
             project
                 .segments
@@ -166,6 +168,36 @@ pub fn uses_directory(project: &Project, root: &Path) -> bool {
             fs::canonicalize(&path).unwrap_or(path).starts_with(root)
         })
 }
+fn within(path:&Path,root:&Path)->bool {
+    !path.as_os_str().is_empty()&&fs::canonicalize(path).unwrap_or_else(|_|path.to_owned()).starts_with(root)
+}
+fn production_uses(p:&crate::model::ProductionSettings,root:&Path)->bool {
+    [&p.voice_reference_path,&p.avatar_image_path].into_iter().any(|v|within(Path::new(v),root))
+}
+fn check_saved_references(data:&Path,root:&Path)->Result<()> {
+    let check=|path:&Path|->Result<()> {
+        if path.is_file() {
+            let value:serde_json::Value=serde_json::from_slice(&fs::read(path)?).context("Không đọc được thiết lập; chưa thể kiểm tra tài nguyên dùng chung")?;
+            // Check saved paths even when inactive: users may enable them later.
+            fn references(v:&serde_json::Value,root:&Path)->bool {
+                match v {
+                    serde_json::Value::Object(o)=>o.iter().any(|(k,v)|
+                        (matches!(k.as_str(),"voice_reference_path"|"avatar_image_path")&&v.as_str().is_some_and(|s|within(Path::new(s),root)))||references(v,root)),
+                    serde_json::Value::Array(a)=>a.iter().any(|v|references(v,root)),
+                    _=>false,
+                }
+            }
+            ensure!(!references(&value,root),"Thiết lập {} đang dùng giọng/ảnh trong dự án này. Lưu lại thiết lập để chuyển tài nguyên sang kho chung trước khi xóa.",path.display());
+        }
+        Ok(())
+    };
+    check(&data.join("settings.json"))?;check(&data.join("project-defaults.json"))?;
+    for entry in fs::read_dir(data.join("batches")).into_iter().flatten() {
+        let entry=entry?;
+        if entry.file_type()?.is_dir(){check(&entry.path().join("template.json"))?;check(&entry.path().join("settings.json"))?;}
+    }
+    Ok(())
+}
 
 pub fn delete(library: &Path, path: &Path, active: Option<&Project>) -> Result<u64> {
     if let (Some(data),Some(id))=(library.parent(),path.parent().and_then(|p|p.file_name()).and_then(|v|v.to_str())) {
@@ -173,6 +205,7 @@ pub fn delete(library: &Path, path: &Path, active: Option<&Project>) -> Result<u
     }
     // Recheck on confirmation; do not trust the path/size captured by the dialog.
     let info = inspect(library, path)?;
+    check_saved_references(library.parent().context("Thiếu thư mục dữ liệu")?,&info.root)?;
     for other_path in list(library) {
         let other_root = fs::canonicalize(other_path.parent().context("Thiếu thư mục")?)?;
         if other_root == info.root {

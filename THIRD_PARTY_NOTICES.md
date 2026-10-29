@@ -4,7 +4,7 @@
 - Node.js 22.23.4 (Windows x64), MIT and bundled dependency notices: https://nodejs.org/dist/v22.23.4/ . License text in `tools/NODE-LICENSE.txt`. Included for yt-dlp JavaScript challenge support.
 - Download URLs and SHA256 values for runtime tools: `tools/runtime-lock.json`; exact Python package versions: `workers/requirements.lock`.
 
-- Evidence reveal SFX: Kenney Interface Sounds 1.0, CC0 1.0, https://kenney.nl/assets/interface-sounds . Imported maximize_006/drop_001/glass_001 as PCM WAV; embedded offline in the app. Source details: resources/sfx/CREDITS.md and the generated local evidence-sfx assets' CREDITS.md.
+- Evidence reveal SFX: user-supplied `paper_tear.mp3`, `appear.mp3`, and `dragon-studio-pop-402324.mp3`, trimmed and converted to embedded PCM WAV for offline preview/export. Source details: resources/sfx/CREDITS.md and sources.json. These replace the earlier Kenney CC0 assets; no redistribution license is asserted for the replacement files.
 
 - FFmpeg/ffprobe 9.0.2 full shared build by Gyan: https://www.gyan.dev/ffmpeg/builds/ . GPL v3 text in `tools/FFMPEG-LICENSE.txt`; exact configuration and linked libraries in `tools/FFMPEG-BUILDINFO.txt`. FFmpeg source: https://ffmpeg.org/download.html#releases . Gyan build source information: https://www.gyan.dev/ffmpeg/builds/ . Keep the notices and accompanying DLLs together with the binaries.
 - yt-dlp 2026.10.21 Windows standalone executable: https://github.com/yt-dlp/yt-dlp/releases/tag/2026.10.21 . Verified against the upstream `SHA2-256SUMS`, retained in `tools/yt-dlp-SHA2-256SUMS`. Licensing and bundled component details: https://github.com/yt-dlp/yt-dlp/blob/2026.10.21/LICENSE . Upstream source for this release: https://github.com/yt-dlp/yt-dlp/tree/2026.10.21 .

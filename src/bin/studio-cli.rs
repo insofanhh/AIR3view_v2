@@ -7,6 +7,15 @@ fn main() -> Result<()> {
     let s = Settings::default();
     let cancel = process::cancel_token();
     match args.get(1).map(String::as_str) {
+        Some("refresh-sfx-library")=>{
+            let root=data_dir().join("projects");let mut projects=0;let mut sounds=0;
+            for path in reaction_studio::project_store::list(&root) {
+                let changed=reaction_studio::evidence_sfx::refresh_saved_project(&path)
+                    .with_context(||format!("Không cập nhật được SFX: {}",path.display()))?;
+                if changed>0 {projects+=1;sounds+=changed;println!("{}",serde_json::json!({"project":path,"sounds":changed}));}
+            }
+            println!("{}",serde_json::json!({"updated_projects":projects,"updated_sounds":sounds}));
+        },
         Some("batch-create")=>{
             let template=Project::load(Path::new(args.get(2).context("batch-create <template.json> <urls.txt> [output-folder]")?))?;
             let urls=fs::read_to_string(args.get(3).context("urls.txt")?)?;
@@ -42,9 +51,12 @@ fn main() -> Result<()> {
             println!("{}",serde_json::to_string_pretty(&report)?);
         },
         Some("evidence")=>{
-            let p=Project::load(Path::new(args.get(2).context("evidence <project.json>")?))?;
+            let path=data_dir().join("settings.json");let settings=if path.is_file(){Settings::load(&path)?}else{s};
+            let mut p=Project::load(Path::new(args.get(2).context("evidence <project.json> [--recheck]")?))?;
+            if args.iter().any(|a|a=="--recheck"){reaction_studio::evidence_selection::invalidate(&mut p,None);}
+            let settings=reaction_studio::workflow::effective_settings(&p,&settings);
             let (tx,rx)=std::sync::mpsc::channel();let reporter=std::thread::spawn(move||while let Ok(e)=rx.recv(){if let pipeline::Event::Stage{lane,message,..}=e{println!("{lane}: {message}");}});
-            let result=pipeline::generate_evidence(p,s,tx,cancel);let _=reporter.join();let p=result?;println!("OK: {} cảnh",p.segments.len());
+            let result=pipeline::generate_evidence(p,settings,tx,cancel);let _=reporter.join();let p=result?;println!("OK: {} cảnh",p.segments.len());
         },
         Some("repair-script")=>{
             let settings_path=data_dir().join("settings.json");
@@ -80,7 +92,7 @@ fn main() -> Result<()> {
                 } else if args[1] == "script-only" {
                     let mut project=project;
                     let plan=reaction_studio::providers::analyze(&project,&settings,&cancel)?;
-                    project.title=plan.title;project.analysis_summary=plan.analysis_summary;project.segments=plan.segments;
+                    pipeline::apply_plan(&mut project,plan)?;
                     project.validate(true)?;project.check_duration()?;project.save()?;
                     drop(tx);
                     Ok(project)

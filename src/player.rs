@@ -19,6 +19,7 @@ use std::{
 };
 
 pub enum PlayerEvent {
+    Backgrounds { generation:u64, count:usize },
     Layers { generation:u64, ms:u64, frames:Vec<(String,image::RgbaImage)> },
     Frame {
         generation: u64,
@@ -39,7 +40,10 @@ pub struct Player {
     cancel: Cancel,
     pub generation: u64,
     pub playing: bool,
+    pub preparing_backgrounds: usize,
     audio_mix: std::sync::Arc<std::sync::Mutex<Vec<(String,f32,bool)>>>,
+    sfx_updates:std::sync::Arc<std::sync::Mutex<Option<Vec<crate::composition::LayerClip>>>>,
+    audition_cancel:Cancel,
 }
 impl Default for Player {
     fn default() -> Self {
@@ -50,18 +54,22 @@ impl Default for Player {
             cancel: process::cancel_token(),
             generation: 0,
             playing: false,
+            preparing_backgrounds:0,
             audio_mix:Default::default(),
+            sfx_updates:Default::default(),audition_cancel:process::cancel_token(),
         }
     }
 }
 impl Player {
-    pub fn composition(&mut self,p:crate::model::Project,s:Settings,ms:u64,play:bool) {
+    pub fn composition(&mut self,mut p:crate::model::Project,s:Settings,ms:u64,play:bool) {
+        p.ensure_composition();
         self.stop();self.cancel=process::cancel_token();self.playing=play;
         self.update_audio(&p);
+        self.sfx_updates=Default::default();let sfx_updates=self.sfx_updates.clone();
         let audio_mix=self.audio_mix.clone();
         let cancel=self.cancel.clone();let tx=self.tx.clone();let generation=self.generation;
         thread::spawn(move || {
-            if let Err(e)=composition_worker(&p,&s,ms,play,&cancel,&tx,generation,audio_mix) {
+            if let Err(e)=composition_worker(&p,&s,ms,play,&cancel,&tx,generation,audio_mix,sfx_updates) {
                 let _=tx.try_send(PlayerEvent::Error{generation,message:format!("Layer preview: {e:#}")});
             }
             let _=tx.try_send(PlayerEvent::Stopped{generation});
@@ -70,9 +78,30 @@ impl Player {
     pub fn update_audio(&self,p:&crate::model::Project) {
         if let Ok(mut controls)=self.audio_mix.lock(){*controls=p.composition_snapshot().clips.iter().filter(|c|c.audio()).map(|c|(c.id.clone(),c.effective_gain(p),c.enabled(p))).collect();}
     }
+    pub fn refresh_sfx(&self,p:&crate::model::Project) {
+        self.update_audio(p);
+        if let Ok(mut pending)=self.sfx_updates.lock(){*pending=Some(p.composition_snapshot().clips.into_iter().filter(|c|c.track==crate::timeline::SFX).collect());}
+    }
+    pub fn audition(&mut self,style:&str,kind:&str,gain:f32)->anyhow::Result<()> {
+        let (path,_)=crate::evidence_sfx::selected_sound(style,0,kind).context("Không đọc được thư viện SFX")?;
+        self.audition_cancel.store(true,Ordering::Relaxed);self.audition_cancel=process::cancel_token();
+        let cancel=self.audition_cancel.clone();let tx=self.tx.clone();let generation=self.generation;
+        thread::spawn(move||{
+            let result=(||->anyhow::Result<()>{
+                let (_stream,handle)=rodio::OutputStream::try_default().context("Không mở được thiết bị âm thanh để nghe thử")?;
+                let sink=rodio::Sink::try_new(&handle)?;sink.set_volume(gain.clamp(0.,2.));
+                sink.append(rodio::Decoder::new(BufReader::new(std::fs::File::open(path)?))?);
+                while !cancel.load(Ordering::Relaxed)&&!sink.empty(){thread::sleep(Duration::from_millis(10));}
+                sink.stop();Ok(())
+            })();
+            if let Err(error)=result{let _=tx.try_send(PlayerEvent::Error{generation,message:format!("Nghe thử SFX: {error:#}")});}
+        });Ok(())
+    }
     pub fn stop(&mut self) {
+        self.audition_cancel.store(true,Ordering::Relaxed);
         self.cancel.store(true, Ordering::Relaxed);
         self.playing = false;
+        self.preparing_backgrounds=0;
         self.generation += 1;
     }
     pub fn seek(&mut self, s: Settings, path: PathBuf, ms: u64) {
@@ -177,10 +206,23 @@ impl AudioSource for ControlledAudio {
     fn sample_rate(&self)->u32{self.source.sample_rate()}
     fn total_duration(&self)->Option<Duration>{self.source.total_duration()}
 }
+fn replace_sfx(comp:&mut crate::composition::Composition,new:Vec<crate::composition::LayerClip>,now:u64)->(Vec<String>,Vec<String>) {
+    let fingerprint=|c:&crate::composition::LayerClip|serde_json::to_vec(&(&c.media,c.media_in_ms,c.start_ms,c.duration_ms,c.playback_rate,c.fade_in_ms,c.fade_out_ms)).unwrap_or_default();
+    let old:Vec<_>=comp.clips.iter().filter(|c|c.track==crate::timeline::SFX).collect();
+    let stop:Vec<_>=old.iter().filter(|c|new.iter().find(|n|n.id==c.id).is_none_or(|n|fingerprint(n)!=fingerprint(c))).map(|c|c.id.clone()).collect();
+    let retired=new.iter().filter(|n|old.iter().find(|c|c.id==n.id).map_or(n.start_ms<now,|c|c.end()<=now)).map(|n|n.id.clone()).collect();
+    comp.clips.retain(|c|c.track!=crate::timeline::SFX);comp.clips.extend(new);(stop,retired)
+}
 #[allow(clippy::too_many_arguments)]
-fn composition_worker(p:&crate::model::Project,s:&Settings,ms:u64,play:bool,cancel:&Cancel,tx:&SyncSender<PlayerEvent>,generation:u64,controls:AudioControls)->anyhow::Result<()> {
+fn composition_worker(p:&crate::model::Project,s:&Settings,ms:u64,play:bool,cancel:&Cancel,tx:&SyncSender<PlayerEvent>,generation:u64,controls:AudioControls,sfx_updates:std::sync::Arc<std::sync::Mutex<Option<Vec<crate::composition::LayerClip>>>>)->anyhow::Result<()> {
+    let count=crate::evidence::pending_backgrounds(p);
+    if count>0 {
+        let _=tx.try_send(PlayerEvent::Backgrounds{generation,count});
+        crate::evidence::prepare_backgrounds(p,s,cancel).context("Không cập nhật được nền dẫn chứng; kiểm tra video nguồn và thử lại")?;
+    }
     if play {crate::background_music::prepare(p,s,cancel)?;}
-    let comp=p.composition_snapshot();let end=comp.duration_ms();let mut decoders=std::collections::BTreeMap::<String,LayerDecoder>::new();
+    let mut comp=p.composition_snapshot();let end=comp.duration_ms();let mut decoders=std::collections::BTreeMap::<String,LayerDecoder>::new();
+    let mut retired_sfx=std::collections::BTreeSet::new();
     let mut stills=std::collections::BTreeMap::<String,image::RgbaImage>::new();
     let mut delivered=std::collections::BTreeSet::new();
     let audio_stream=if play {rodio::OutputStream::try_default().ok()}else{None};
@@ -188,9 +230,15 @@ fn composition_worker(p:&crate::model::Project,s:&Settings,ms:u64,play:bool,canc
     let mut clock:Option<std::time::Instant>=None;let mut index=0u64;
     while !cancel.load(Ordering::Relaxed) {
         let time=ms+index*1000/24;if time>=end {break;}
+        let pending=sfx_updates.lock().ok().and_then(|mut p|p.take());
+        if let Some(new)=pending {
+            let now=clock.map(|clock|ms+clock.elapsed().as_millis() as u64).unwrap_or(ms);
+            let (stop,retired)=replace_sfx(&mut comp,new,now);retired_sfx.extend(retired);
+            for id in stop{if let Some(sink)=sinks.remove(&id){sink.stop();}}
+        }
         sinks.retain(|id,_|comp.clips.iter().any(|c|&c.id==id&&c.end()>time));
         if let Some((_,handle))=&audio_stream {
-            for c in comp.clips.iter().filter(|c|c.audio()&&c.end()>time&&c.start_ms<=time+2000) {
+            for c in comp.clips.iter().filter(|c|c.audio()&&!retired_sfx.contains(&c.id)&&c.end()>time&&c.start_ms<=time+2000) {
                 if sinks.contains_key(&c.id){continue;}
                 let Some(path)=c.media.as_ref().filter(|p|p.is_file()) else{continue;};
                 let audio_time=clock.map(|clock|ms+clock.elapsed().as_millis() as u64).unwrap_or(ms);
@@ -384,6 +432,24 @@ fn play_worker(
 mod original_audio_tests {
     use super::*;
     use crate::{model::*,timeline};
+    #[test]
+    fn live_sound_style_swap_preserves_voice_and_retires_finished_effects() {
+        let mut p=Project{segments:vec![Segment{id:"host".into(),kind:"host".into(),audio:Some("voice.wav".into()),duration_ms:3000,graphics:vec![GraphicCue{start_ms:0,end_ms:1000,..Default::default()},GraphicCue{start_ms:2000,end_ms:2900,..Default::default()}],..Default::default()}],..Default::default()};
+        p.card_sound.style="pop".into();p.ensure_composition();let mut running=p.composition_snapshot();
+        let pictures=serde_json::to_vec(&running.clips.iter().filter(|c|c.track!=timeline::SFX).collect::<Vec<_>>()).unwrap();
+        let mut player=Player::default();player.playing=true;let generation=player.generation;
+        p.card_sound.style="whoosh".into();crate::evidence_sfx::apply_settings(&mut p,crate::evidence_sfx::Scope::Cards,None);
+        player.refresh_sfx(&p);assert!(player.playing);assert_eq!(player.generation,generation);
+        let pending=player.sfx_updates.lock().unwrap().take().unwrap();
+        let (stopped,retired)=replace_sfx(&mut running,pending,500);
+        assert_eq!(stopped.len(),2);assert_eq!(retired,vec!["host:gfx:0:9"]);
+        assert!(stopped.iter().all(|id|id.contains(":gfx:")));
+        assert_eq!(pictures,serde_json::to_vec(&running.clips.iter().filter(|c|c.track!=timeline::SFX).collect::<Vec<_>>()).unwrap());
+        // Gain-only changes keep the current sink; audio samples use live controls.
+        p.card_sound.gain=0.5;player.refresh_sfx(&p);
+        let pending=player.sfx_updates.lock().unwrap().take().unwrap();
+        assert!(replace_sfx(&mut running,pending,600).0.is_empty());
+    }
     #[test]
     fn real_evidence_whoosh_reaches_native_preview_with_gain_and_mute() {
         let mut p=Project{segments:vec![Segment{id:"host".into(),kind:"host".into(),duration_ms:2000,

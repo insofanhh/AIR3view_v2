@@ -1,0 +1,38 @@
+{
+  "whoosh": {
+    "source": "paper_tear.mp3",
+    "source_sha256": "2720ad9a7f2d4ab1964605e5d02164c61b6342f96957d28f7c82b16acb6459b9",
+    "trim_start_seconds": 0.451,
+    "trim_end_seconds": 1.095,
+    "target_rms_dbfs": -16,
+    "gain_db": 22.073,
+    "duration_ms": 644,
+    "peak_dbfs": -1.0,
+    "rms_dbfs": -16.98,
+    "output_sha256": "9ba13469427f2d89c8f1f20b4cb3544275743a86e9274a82efb84e97a9142e12"
+  },
+  "ting": {
+    "source": "appear.mp3",
+    "source_sha256": "0c46d3855ed1a76b7392c31237b9786f6b173d5d34184073f124d2ea514450f8",
+    "trim_start_seconds": 0.055,
+    "trim_end_seconds": 0.375,
+    "target_rms_dbfs": -18,
+    "gain_db": 2.278,
+    "duration_ms": 320,
+    "peak_dbfs": -1.0,
+    "rms_dbfs": -22.839,
+    "output_sha256": "d233ebb049cec239f6b0e243c2ba95c8f2625e52025887ab0d2b996166b77e81"
+  },
+  "pop": {
+    "source": "dragon-studio-pop-402324.mp3",
+    "source_sha256": "bb343a49535045ee3350f30fe01848ce8f933b1394710a71069c96435116af54",
+    "trim_start_seconds": 0.173,
+    "trim_end_seconds": 0.375,
+    "target_rms_dbfs": -18,
+    "gain_db": -5.482,
+    "duration_ms": 202,
+    "peak_dbfs": -2.45,
+    "rms_dbfs": -18.0,
+    "output_sha256": "d4994439cd9f921feee2a10e36a1cc632114c49ca92197f16dbd5eb2a739e48d"
+  }
+}

@@ -97,3 +97,60 @@ pub fn file_fingerprint(path: &str) -> String {
         .map(media::hash)
         .unwrap_or_else(|_| format!("missing:{path}"))
 }
+
+/// Pin bytes without transcoding: the shared asset survives deletion of the
+/// project which originally owned it. Recovery accepts exact identity only.
+pub fn shared_file(data:&Path, value:&str, label:&str)->Result<PathBuf> {
+    ensure!(!value.trim().is_empty(),"Chưa chọn {label}. Chọn lại file trong Giọng & nhân vật.");
+    let source=Path::new(value);
+    let store=data.join("assets/references");
+    let alias=store.join("aliases").join(format!("{}.json",media::hash(value.as_bytes())));
+    let (bytes,ext)=if source.is_file() {
+        ensure!(fs::metadata(source)?.len()<=64*1024*1024,"File {label} vượt 64 MB");
+        (fs::read(source).with_context(||format!("Không đọc được {label}: {value}"))?,source.extension().and_then(|v|v.to_str()).unwrap_or("bin").to_ascii_lowercase())
+    } else {
+        let recorded=fs::read(&alias).ok().and_then(|b|serde_json::from_slice::<(String,String)>(&b).ok());
+        let expected=recorded.as_ref().map(|r|r.0.as_str()).or_else(||source.file_stem().and_then(|v|v.to_str()))
+            .filter(|v|v.len()==64&&v.bytes().all(|b|b.is_ascii_hexdigit()))
+            .with_context(||format!("Không tìm thấy {label}: {value}. Chọn lại đúng file trong Giọng & nhân vật."))?;
+        let mut found=None;
+        for folder in [&store,&data.join("assets/voices"),&data.join("assets/avatars")] {
+            for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+                let path=entry.path();
+                if entry.file_type().is_ok_and(|t|t.is_file())&&entry.metadata().is_ok_and(|m|m.len()<=64*1024*1024) {
+                    if let Ok(b)=fs::read(&path) {if media::hash(&b)==expected {
+                        found=Some((b,path.extension().and_then(|v|v.to_str()).unwrap_or("bin").to_ascii_lowercase()));break;
+                    }}
+                }
+            }
+            if found.is_some(){break;}
+        }
+        found.with_context(||format!("Không tìm thấy bản cùng nội dung của {label}: {value}. Chọn lại file; tool không tự đổi sang giọng/ảnh khác."))?
+    };
+    ensure!(!bytes.is_empty(),"File {label} rỗng");
+    let digest=media::hash(&bytes);
+    ensure!(ext.bytes().all(|b|b.is_ascii_alphanumeric()),"Đuôi file {label} không hợp lệ");
+    fs::create_dir_all(&store)?;
+    let target=store.join(format!("{digest}.{ext}"));
+    if !target.is_file() {
+        use std::io::Write;
+        let mut pending=tempfile::NamedTempFile::new_in(&store)?;pending.write_all(&bytes)?;
+        if let Err(e)=pending.persist_noclobber(&target) {if !target.is_file(){return Err(e.error.into());}}
+    }
+    ensure!(media::hash(fs::read(&target)?)==digest,"Bản lưu {label} bị lỗi; kiểm tra ổ đĩa");
+    fs::create_dir_all(alias.parent().unwrap())?;
+    let mut pending=tempfile::NamedTempFile::new_in(alias.parent().unwrap())?;
+    serde_json::to_writer(pending.as_file_mut(),&(digest,ext))?;
+    pending.persist(&alias).map_err(|e|e.error)?;
+    Ok(target)
+}
+
+pub fn pin_production(data:&Path,p:&mut crate::model::ProductionSettings)->Result<()> {
+    if p.voice_reference_enabled || (!p.voice_reference_path.is_empty()&&Path::new(&p.voice_reference_path).is_file()) {
+        p.voice_reference_path=shared_file(data,&p.voice_reference_path,"giọng tham chiếu")?.to_string_lossy().into_owned();
+    }
+    if (!p.avatar_image_path.is_empty()&&Path::new(&p.avatar_image_path).is_file()) || (p.avatar_enabled&&p.avatar_provider=="heygen"&&!p.avatar_image_path.is_empty()) {
+        p.avatar_image_path=shared_file(data,&p.avatar_image_path,"ảnh nhân vật HeyGen")?.to_string_lossy().into_owned();
+    }
+    Ok(())
+}

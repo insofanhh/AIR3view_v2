@@ -67,6 +67,8 @@ enum Task {
     Prepare,
     Assets,
     Evidence,
+    EvidenceReview(Option<String>),
+    EvidencePick { item_id:String, choice_id:Option<String> },
     Speech,
     Render,
     Metadata { input: PathBuf, output: PathBuf },
@@ -238,6 +240,10 @@ impl StudioApp {
         let mut project = Project::default();
         if let Some(defaults) = ProjectDefaults::load_with_layer_fallback(&root.join("project-defaults.json"), history.first().map(|p| p.as_path())) {
             defaults.apply(&mut project);
+        } else {
+            // Fresh installations start with the US preset. Saved/custom
+            // templates and existing projects retain their explicit choices.
+            crate::us_editorial::apply(&mut project.rules);
         }
         project.root = root.join("projects").join(&project.id);
         if let Some(path) = std::env::args().skip(1).find(|a| a.ends_with(".json")) {
@@ -332,11 +338,15 @@ impl StudioApp {
         };
         app.restore_job_notice();
         if std::env::args().any(|a|a=="--updates=open") { app.updates.open=true; }
+        app.timeline_view.project_id=app.project.id.clone();
         app.timeline_view.cursor=crate::timeline::starts(&app.project).get(app.selected).copied().unwrap_or(0);
         if let Some(ms)=std::env::args().find_map(|a|a.strip_prefix("--preview-ms=").and_then(|v|v.parse().ok())) {app.timeline_view.cursor=ms;}
         if std::env::args().any(|a|a=="--layer=avatar"){app.select_timeline_layer(crate::timeline::AVATAR);}
         app.request_frame();
         if app.capture_path.is_some() {
+            if std::env::args().any(|a|a=="--capture-evidence-source") {
+                if let Some(item)=app.project.segments.get(app.selected).and_then(|s|s.evidence_items.first()).cloned(){app.view_evidence_source(&item,false);}
+            }
             if std::env::args().any(|a|a=="--capture-preset=export") {app.presets.open=true;app.presets.export=true;}
             if let Some(path)=std::env::args().find_map(|a|a.strip_prefix("--capture-preset-import=").map(PathBuf::from)) {app.read_preset(path);}
         }
@@ -413,7 +423,8 @@ impl StudioApp {
     }
     fn remember_project_defaults(&mut self) -> anyhow::Result<()> {
         let root = self.projects_root.parent().context("Thiếu thư mục cấu hình")?;
-        let defaults = self.presets.next_defaults.clone().unwrap_or_else(||ProjectDefaults::from_project(&self.project));
+        let mut defaults = self.presets.next_defaults.clone().unwrap_or_else(||ProjectDefaults::from_project(&self.project));
+        if let Some(prod)=&mut defaults.production {crate::input_assets::pin_production(root,prod)?;}
         write_json(&root.join("project-defaults.json"), &defaults)?;
         if self.presets.next_defaults.is_none(){self.project.layer_defaults = defaults.layer_defaults;}
         Ok(())
@@ -531,7 +542,9 @@ impl StudioApp {
         }
         while let Ok(event) = self.player.rx.try_recv() {
             match event {
+                PlayerEvent::Backgrounds{generation,count} if generation==self.player.generation=>{self.player.preparing_backgrounds=count;}
                 PlayerEvent::Layers {generation,ms,frames} if generation==self.player.generation => {
+                    self.player.preparing_backgrounds=0;
                     self.layers.live=true;
                     self.preview_final=false;self.preview_scene=None;
                     self.playhead=ms;self.timeline_view.cursor=ms;
@@ -572,12 +585,14 @@ impl StudioApp {
                     }
                 }
                 PlayerEvent::Stopped { generation } if generation == self.player.generation => {
+                    self.player.preparing_backgrounds=0;
                     self.player.playing = false
                 }
                 PlayerEvent::Error {
                     generation,
                     message,
                 } if generation == self.player.generation => {
+                    self.player.preparing_backgrounds=0;
                     self.player.playing = false;
                     self.message(message, true);
                 }
@@ -669,10 +684,23 @@ impl StudioApp {
                         p.music.file=crate::background_music::import(&s,&path,&folder,&cancel)?;p.music.name=path.file_name().unwrap_or_default().to_string_lossy().into_owned();
                         p.music.enabled=true;if let Some(comp)=&mut p.composition{comp.removed.retain(|id|id!="music-bed");}p.rendered=None;p.ensure_composition();p.save()?;Ok(p)
                     },
-                    Task::Automatic { resume } => crate::workflow::run(p,s,tx.clone(),cancel,resume),
+                    Task::Automatic { resume } => {
+                        if resume && crate::workflow::JobState::load(&p.root).is_some_and(|j|j.status==crate::workflow::Status::Failed) {
+                            crate::duration_recovery::Recovery::manual_retry(&p.root)?;
+                        }
+                        crate::workflow::run(p,s,tx.clone(),cancel,resume)
+                    },
                     Task::Prepare => pipeline::prepare(p, s, tx.clone(), cancel),
                     Task::Assets => pipeline::generate_assets(p, s, tx.clone(), cancel),
                     Task::Evidence => pipeline::generate_evidence(p,s,tx.clone(),cancel),
+                    Task::EvidenceReview(id) => {
+                        let mut p=p;crate::evidence_selection::invalidate(&mut p,id.as_deref());
+                        pipeline::generate_evidence(p,s,tx.clone(),cancel)
+                    },
+                    Task::EvidencePick {item_id,choice_id} => {
+                        let mut p=p;crate::evidence_selection::pick(&mut p,&item_id,choice_id.as_deref())?;
+                        pipeline::generate_evidence(p,s,tx.clone(),cancel)
+                    },
                     Task::Speech => pipeline::generate_speech(p, s, tx.clone(), cancel),
                     Task::Transcribe => {
                         pipeline::transcribe(p, s, worker_path("transcribe.py"), tx.clone(), cancel)
@@ -1459,25 +1487,20 @@ impl StudioApp {
             if ui
                 .add_enabled(
                     !self.busy,
-                    egui::Button::new("Dùng prompt review / reaction theo Độ dài"),
+                    egui::Button::new("Dùng prompt True Crime / Bodycam"),
                 )
                 .clicked()
             {
-                self.project.rules.prompt = DEFAULT_REACTION_PROMPT.into();
+                crate::us_editorial::apply(&mut self.project.rules);
                 self.touch();
             }
-            let changed = ui
-                .add_enabled(
-                    !self.busy,
-                    egui::TextEdit::multiline(&mut self.project.rules.prompt)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(3),
-                )
-                .changed();
+            let changed = script_prompt_input(ui,"editor_prompt_text",&mut self.project.rules.prompt,!self.busy).changed();
             if changed {
                 self.touch();
             }
             prompt_duration_hint(ui, &self.project.rules);
+            crate::us_editorial::profile_ui(ui,&mut self.project.rules);
+            crate::us_editorial::quality_ui(ui,&self.project);
             if !self.project.analysis_summary.is_empty() {
                 ui.label(&self.project.analysis_summary);
             }
@@ -2188,6 +2211,34 @@ if ui.button("Tạo icon Desktop / Start Menu").clicked(){self.busy=true;let tx=
     });});
     }
 }
+fn script_prompt_input(ui:&mut egui::Ui,id:&str,text:&mut String,enabled:bool)->egui::Response {
+    let result=egui::ScrollArea::vertical().id_salt(id).max_height(180.).show(ui,|ui|{
+        ui.add_enabled(enabled,egui::TextEdit::multiline(text).desired_width(f32::INFINITY).desired_rows(5))
+    });
+    #[cfg(test)] ui.ctx().data_mut(|data|data.insert_temp(egui::Id::new((id,"viewport")),result.inner_rect));
+    result.inner
+}
+#[cfg(test)]
+#[test]
+fn long_bodycam_prompt_keeps_the_following_controls_visible() {
+    for width in [340.,460.,900.] {
+        let ctx=egui::Context::default();configure_context(&ctx);
+        let mut text=DEFAULT_REACTION_PROMPT.to_string();
+        let screen=Rect::from_min_size(Pos2::ZERO,Vec2::new(width,600.));
+        let mut button=Rect::NOTHING;
+        for _ in 0..3 {let _=ctx.run(egui::RawInput{screen_rect:Some(screen),..Default::default()},|ctx|{
+            egui::CentralPanel::default().show(ctx,|ui|{
+                script_prompt_input(ui,"prompt_layout_test",&mut text,true);
+                button=ui.button("Dùng prompt True Crime / Bodycam").rect;
+                prompt_duration_hint(ui,&ScriptRules::default());
+            });
+        });}
+        let viewport=ctx.data(|data|data.get_temp::<Rect>(egui::Id::new(("prompt_layout_test","viewport")))).unwrap();
+        assert!(viewport.height()<=181.&&screen.contains_rect(viewport));
+        assert!(screen.contains_rect(button)&&!viewport.intersects(button));
+        assert_eq!(text,DEFAULT_REACTION_PROMPT);
+    }
+}
 fn prompt_duration_hint(ui: &mut egui::Ui, rules: &ScriptRules) {
     ui.label(
         RichText::new(format!(
@@ -2210,8 +2261,17 @@ fn hook_settings(ui: &mut egui::Ui, rules: &mut ScriptRules) {
     ui.checkbox(&mut rules.intercuts_enabled,"Xen cảnh gốc + tiếng gốc giữa lời review");
     ui.add_enabled_ui(rules.intercuts_enabled,|ui|{
         ui.horizontal_wrapped(|ui|{
+            ui.selectable_value(&mut rules.intercut_mode,"fixed".into(),"Số đoạn cố định");
+            ui.selectable_value(&mut rules.intercut_mode,"cadence".into(),"Tự căn nhịp 15–20 s");
+        });
+        if crate::us_editorial::automatic(rules) {
+            ui.small(format!("Dự kiến {} đoạn theo Độ dài",crate::us_editorial::intercut_count(rules)));
+        }
+        ui.horizontal_wrapped(|ui|{
+            if !crate::us_editorial::automatic(rules) {
             ui.label("Số đoạn");
             ui.add(egui::DragValue::new(&mut rules.intercut_count).range(1..=8));
+            }
             ui.label("Mỗi đoạn");
             ui.add(egui::DragValue::new(&mut rules.intercut_min_seconds).range(1..=10).suffix(" s"));
             ui.label("đến");

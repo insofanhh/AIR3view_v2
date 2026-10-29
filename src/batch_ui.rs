@@ -203,7 +203,7 @@ impl StudioApp {
                         self.message("Đã tạo các dự án riêng và xếp hàng đợi.", false);
                     }
                 }
-                Err(e) => self.message(format!("Không tạo được hàng đợi: {e:#}"), true),
+                Err(e) => self.message(format!("Không tạo được phiên hàng loạt · {}: {e:#}", crate::date_filter::timestamp(Some(batch::now()))), true),
             }
         }
         if self.batch_view.last_poll.elapsed() > Duration::from_secs(1) {

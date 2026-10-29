@@ -221,6 +221,26 @@ fn snapshot_file(path: &mut String, folder: &Path, label: &str) -> Result<()> {
     *path = target.to_string_lossy().into_owned();
     Ok(())
 }
+/// Own only brand-new UUID directories. Failed creation never leaves children
+/// or a half-published session, and never removes an existing project.
+#[derive(Default)]
+struct Creation {
+    roots:Vec<PathBuf>,
+    committed:bool,
+}
+impl Creation {
+    fn directory(&mut self,path:&Path)->Result<()> {
+        ensure!(path.file_name().and_then(|v|v.to_str()).is_some_and(|v|uuid::Uuid::parse_str(v).is_ok()),"ID thư mục tạo phiên không hợp lệ");
+        fs::create_dir_all(path.parent().context("Thiếu thư mục cha")?)?;
+        fs::create_dir(path)?;
+        self.roots.push(path.to_owned());Ok(())
+    }
+}
+impl Drop for Creation {
+    fn drop(&mut self) {
+        if !self.committed {for root in self.roots.iter().rev(){let _=fs::remove_dir_all(root);}}
+    }
+}
 pub fn create(
     data: &Path,
     title: &str,
@@ -275,7 +295,12 @@ pub fn create(
         if !prod.avatar_enabled || prod.avatar_provider != "heygen" {
             prod.avatar_image_path.clear();
         }
+        crate::input_assets::pin_production(data,prod)?;
     }
+    let mut probe=Project::default();defaults.apply(&mut probe);
+    probe.sources=vec![Source{id:"src_1".into(),url:list.urls[0].clone(),..Default::default()}];
+    workflow::preflight(&probe,&workflow::effective_settings(&probe,settings))?;
+    let mut creation=Creation::default();
     let mut projects = vec![];
     for (index, url) in list.urls.into_iter().enumerate() {
         let mut p = Project::default();
@@ -288,6 +313,7 @@ pub fn create(
             url: url.clone(),
             ..Default::default()
         }];
+        creation.directory(&p.root)?;
         if let Some(prod) = &mut p.production {
             let assets = p.root.join("inputs");
             if prod.voice_reference_enabled {
@@ -324,10 +350,12 @@ pub fn create(
         p.save()?;
     }
     let folder = root(data, &batch.id)?;
-    fs::create_dir_all(&folder)?;
+    creation.directory(&folder)?;
     write_json(&folder.join("template.json"), &defaults)?;
-    write_json(&folder.join("settings.json"), settings)?;
+    let saved_settings=defaults.production.as_ref().map(|p|p.apply(settings)).unwrap_or_else(||settings.clone());
+    write_json(&folder.join("settings.json"), &saved_settings)?;
     batch.save(data)?;
+    creation.committed=true;
     Ok(batch)
 }
 pub fn list(data: &Path) -> Vec<Batch> {
@@ -589,6 +617,15 @@ fn apply_action(batch: &mut Batch, action: Action) -> bool {
         }
     }
 }
+fn reset_manual_duration_retry(data: &Path, batch: &Batch, action: &Action) -> Result<()> {
+    for item in batch.items.iter().filter(|i|!i.export_only && i.state.retryable()) {
+        if matches!(action,Action::RetryAll) || matches!(action,Action::Retry(id) if id==&item.id) {
+            let path=project_path(data,item)?;
+            if path.is_file() { crate::duration_recovery::Recovery::manual_retry(path.parent().unwrap())?; }
+        }
+    }
+    Ok(())
+}
 fn commands(data: &Path, batch: &mut Batch) -> Result<bool> {
     let folder = root(data, &batch.id)?.join("commands");
     let mut paths: Vec<_> = fs::read_dir(folder)
@@ -602,6 +639,7 @@ fn commands(data: &Path, batch: &mut Batch) -> Result<bool> {
     let mut stop = false;
     for path in paths {
         let action: Action = serde_json::from_slice(&fs::read(&path)?)?;
+        reset_manual_duration_retry(data,batch,&action)?;
         stop |= apply_action(batch, action);
         fs::remove_file(path)?;
     }
@@ -614,6 +652,7 @@ pub fn action(data: &Path, id: &str, action: Action) -> Result<()> {
     match Lease::acquire(&root(data, id)?.join("queue.lock")) {
         Ok(_lease) => {
             let mut b = Batch::load(&root(data, id)?.join("batch.json"))?;
+            reset_manual_duration_retry(data,&b,&action)?;
             apply_action(&mut b, action);
             b.save(data)
         }
@@ -667,7 +706,7 @@ fn export_project(path: &Path, project_id: &str) -> Result<Project> {
     p.validate(true)?;
     p.ensure_composition();
     p.check_duration()?;
-    crate::layer_media::validate_assets(&p)?;
+    crate::layer_media::validate_export_inputs(&p)?;
     Ok(p)
 }
 /// Build a read-only review of valid projects, missing files and existing outputs.

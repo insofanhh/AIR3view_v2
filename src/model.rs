@@ -316,6 +316,9 @@ pub struct TimeRange {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct ScriptRules {
+    /// Empty keeps imported/legacy/custom projects on their existing validation rules.
+    pub editorial_profile: String,
+    pub intercut_mode: String,
     pub hook_enabled: bool,
     /// Applied when generating a new script, never inserts guessed footage in an existing edit.
     #[serde(default)]
@@ -336,6 +339,8 @@ pub struct ScriptRules {
 impl Default for ScriptRules {
     fn default() -> Self {
         Self {
+            editorial_profile: String::new(),
+            intercut_mode: "fixed".into(),
             hook_enabled: true,
             intercuts_enabled: true,
             intercut_count: 3,
@@ -353,32 +358,32 @@ impl Default for ScriptRules {
     }
 }
 
-pub const DEFAULT_REACTION_PROMPT: &str = "đọc và hiểu toàn bộ nội dung, tình huống trong video. Sau đó viết lại thành 1 kịch bản mới với nội dung dạng review, reaction ngắn khoảng {duration}. Phong cách kịch bản dạng bất ngờ cho nhân vật review, reaction thoại";
+pub use crate::reaction_prompt::DEFAULT_REACTION_PROMPT;
 
 impl ScriptRules {
     pub fn duration_text(&self) -> String {
+        let unit = if crate::content_language::english(&self.language) { "seconds" } else { "giây" };
         if self.min_seconds == self.max_seconds {
-            format!("{} giây", self.min_seconds)
+            format!("{} {unit}", self.min_seconds)
         } else {
-            format!("{}–{} giây", self.min_seconds, self.max_seconds)
+            format!("{}–{} {unit}", self.min_seconds, self.max_seconds)
         }
     }
 
     /// Only migrate the exact former preset; preserve custom user instructions.
     pub fn migrate_prompt(&mut self) {
         self.language = crate::content_language::canonical(&self.language);
-        let legacy = DEFAULT_REACTION_PROMPT.replace("{duration}", "3-4p");
-        if self.prompt == legacy {
+        let old = crate::reaction_prompt::LEGACY_REACTION_PROMPT;
+        if self.prompt == old || self.prompt == old.replace("{duration}", "3-4p") {
             self.prompt = DEFAULT_REACTION_PROMPT.into();
         }
+        self.prompt=crate::narration_policy::migrate(&self.prompt);
     }
 
     pub fn resolved_prompt(&self) -> String {
         let mut rules = self.clone();
         rules.migrate_prompt();
-        if crate::content_language::english(&rules.language) && rules.prompt == DEFAULT_REACTION_PROMPT {
-            format!("Read and understand the entire video and its situations. Write an original review/reaction script lasting {}–{} seconds. Use a curious, surprised reaction style, with evidence-based analysis and dialogue for the host.", self.min_seconds, self.max_seconds)
-        } else { rules.prompt.replace("{duration}", &self.duration_text()) }
+        rules.prompt.replace("{duration}", &rules.duration_text())
     }
 }
 
@@ -722,8 +727,9 @@ impl Project {
         if self.sources.iter().all(|s| s.duration_ms > 0 && !s.has_audio) { return Ok(()); }
         let clips: Vec<_> = self.segments.iter().enumerate().filter(|(i,s)| s.kind=="source"
             && !(self.rules.hook_enabled && *i==0)).collect();
-        ensure!(clips.len()==self.rules.intercut_count,
-            "Cần {} đoạn hình/tiếng gốc xen giữa các cảnh review (không tính hook); hiện có {}",self.rules.intercut_count,clips.len());
+        let expected=crate::us_editorial::intercut_count(&self.rules);
+        ensure!(clips.len()==expected,
+            "Cần {} đoạn hình/tiếng gốc xen giữa các cảnh review (không tính hook); hiện có {}",expected,clips.len());
         for (i,clip) in clips {
             ensure!(i>0 && i+1<self.segments.len() && self.segments[i-1].kind!="source" && self.segments[i+1].kind!="source",
                 "Đoạn gốc xen kẽ phải có cảnh review/host ở cả trước và sau");
@@ -794,6 +800,8 @@ impl Project {
         self.normalization.validate()?;
         self.output.footage_speed.validate()?;
         self.card_sound.validate()?;
+        ensure!(matches!(self.rules.editorial_profile.as_str(),""|crate::us_editorial::PROFILE),"Preset biên tập chưa hỗ trợ; cập nhật AIR3view trước khi nhập");
+        ensure!(matches!(self.rules.intercut_mode.as_str(),"fixed"|"cadence"),"Chế độ xen tiếng gốc không hợp lệ");
         crate::evidence::validate(self)?;
         ensure!((1..=8).contains(&self.rules.intercut_count)
             && (1..=10).contains(&self.rules.intercut_min_seconds)
@@ -999,14 +1007,7 @@ impl Project {
         Ok(())
     }
     pub fn check_duration(&self) -> Result<()> {
-        let t = if self.composition.is_some() {self.composition_duration()}else{self.duration_ms()};
-        ensure!(
-            t >= self.rules.min_seconds * 1000 && t <= self.rules.max_seconds * 1000,
-            "Timeline dài {:.1}s, mục tiêu {}–{}s. Điều chỉnh cảnh trước khi xuất.",
-            t as f64 / 1000.0,
-            self.rules.min_seconds,
-            self.rules.max_seconds
-        );
+        if let Some(error) = crate::duration_recovery::Mismatch::from_project(self) { return Err(error.into()); }
         Ok(())
     }
 }
@@ -1266,7 +1267,7 @@ mod tests {
         old.output.blur_background = true;
         old.output.avatar_scale = 0.42;
         old.subtitles.highlight = [12, 34, 56];
-        old.card_sound=crate::evidence_sfx::CardSoundSettings{enabled:false,style:"pop".into(),gain:0.6};
+        old.card_sound=crate::evidence_sfx::CardSoundSettings{enabled:false,style:"pop".into(),gain:0.6,..Default::default()};
         let path = temp.path().join("project-defaults.json");
         write_json(&path, &ProjectDefaults::from_project(&old)).unwrap();
         let mut fresh = Project::default();

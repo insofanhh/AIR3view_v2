@@ -120,7 +120,7 @@ def emotion_kind(text):
     text = text.lower()
     if any(x in text for x in ["shock", "surpris", "bất ngờ", "sốc", "giật", "kinh ngạc"]):
         return "surprised"
-    if any(x in text for x in ["sad", "đồng cảm", "buồn", "trầm", "lo lắng"]):
+    if any(x in text for x in ["sad", "concerned", "tense", "somber", "sombre", "đồng cảm", "buồn", "trầm", "lo lắng"]):
         return "concerned"
     if any(x in text for x in ["serious", "nghiêm", "phân tích", "tỉnh táo"]):
         return "serious"

@@ -97,6 +97,11 @@ pub struct EvidenceItem {
     pub kind: String,
     pub source_id: String,
     pub source_time_ms: u64,
+    /// A provider proposes an indexed frame, never a contact-sheet crop.
+    pub frame_id: String,
+    pub coordinate_space: String,
+    pub visual_query: String,
+    pub selection: crate::evidence_selection::Selection,
     pub crop: [f32; 4],
     pub second_source_id: String,
     pub second_time_ms: Option<u64>,
@@ -130,6 +135,10 @@ impl Default for EvidenceItem {
             kind: "frame".into(),
             source_id: String::new(),
             source_time_ms: 0,
+            frame_id: String::new(),
+            coordinate_space: "source_frame".into(),
+            visual_query: String::new(),
+            selection: Default::default(),
             crop: [0., 0., 1., 1.],
             second_source_id: String::new(),
             second_time_ms: None,
@@ -377,6 +386,7 @@ pub fn window(seg: &Segment, item: &EvidenceItem) -> (u64, u64) {
 }
 pub fn content_identity(item: &EvidenceItem) -> Vec<u8> {
     let mut v = item.clone();
+    v.selection = Default::default();
     v.asset = None;
     v.annotation_asset = None;
     v.asset_key.clear();
@@ -549,27 +559,62 @@ pub fn reflow(p: &mut Project) {
     p.rendered = None;
 }
 pub fn background_path(p: &Project, seg: &Segment) -> PathBuf {
+    // Selection and identity must describe the very same pixels. In particular,
+    // a disabled first card must never determine the blur cache key.
+    let item = background_item(seg);
+    let source = item.and_then(|e| p.source(&e.source_id).ok());
+    let stamp = source.and_then(|s| fs::metadata(&s.path).ok()).map(|m|
+        (m.len(), m.modified().ok().and_then(|v|v.duration_since(std::time::UNIX_EPOCH).ok()).map(|v|v.as_nanos())));
     p.root.join("assets/evidence").join(format!(
         "background-{}.png",
         media::hash(
             serde_json::to_vec(&(
+                "background-v2",
                 &p.evidence_settings.background,
                 p.output.portrait,
-                seg.evidence_items.first().map(|e| &e.asset_key)
+                if p.evidence_settings.background=="blur" {
+                    Some((item.map(|e|(&e.asset_key,&e.source_id,e.source_time_ms)),source.map(|s|&s.path),stamp))
+                } else { None }
             ))
             .unwrap_or_default()
         )
     ))
 }
-fn prepare_backgrounds(p: &Project, s: &Settings, cancel: &Cancel) -> Result<()> {
-    for seg in p.segments.iter().filter(|s| {
-        s.kind == "host"
-            && s.evidence_items
-                .iter()
-                .any(|e| e.enabled && e.asset.is_some())
-    }) {
+fn background_item(seg:&Segment)->Option<&EvidenceItem> {
+    seg.evidence_items.iter().find(|e|e.enabled&&e.asset.is_some())
+}
+pub(crate) fn generated_background(path:&Path)->bool {
+    path.file_name().and_then(|v|v.to_str()).and_then(|v|v.strip_prefix("background-")).and_then(|v|v.strip_suffix(".png"))
+        .is_some_and(|v|v.len()==64&&v.bytes().all(|b|b.is_ascii_hexdigit()))
+        && path.parent().is_some_and(|p|p.ends_with("assets/evidence"))
+}
+fn needed_backgrounds(p:&Project)->Vec<&Segment> {
+    if !p.evidence_settings.enabled {return vec![];}
+    let comp=p.composition_snapshot();
+    p.segments.iter().filter(|seg|seg.kind=="host"&&background_item(seg).is_some()&&
+        comp.clips.iter().any(|c|c.scene_id==seg.id&&c.track==crate::timeline::BACKGROUND&&c.enabled(p)&&c.media.as_ref().is_some_and(|m|m==&background_path(p,seg)))).collect()
+}
+pub(crate) fn pending_backgrounds(p:&Project)->usize {
+    let expected=if p.output.portrait{(720,1280)}else{(1280,720)};
+    needed_backgrounds(p).iter().filter(|s|image::image_dimensions(background_path(p,s)).ok()!=Some(expected)).count()
+}
+/// Local cache repair only. Never invokes analysis, TTS, avatar or card selection.
+pub fn prepare_backgrounds(p: &Project, s: &Settings, cancel: &Cancel) -> Result<()> {
+    // Preview seeks and export can overlap. Waiting is cancellable and never
+    // holds the UI thread. Recheck cache after acquiring the producer lock.
+    static LOCK:std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard=loop {
+        process::check_cancel(cancel)?;
+        match LOCK.try_lock() {
+            Ok(g)=>break g,
+            Err(std::sync::TryLockError::Poisoned(e))=>break e.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock)=>std::thread::sleep(Duration::from_millis(15)),
+        }
+    };
+    for seg in needed_backgrounds(p) {
+        process::check_cancel(cancel)?;
         let path = background_path(p, seg);
-        if path.is_file() {
+        if image::image_dimensions(&path).is_ok_and(|v|v==if p.output.portrait{(720,1280)}else{(1280,720)}) {
             continue;
         }
         let (w, h) = if p.output.portrait {
@@ -595,7 +640,7 @@ fn prepare_backgrounds(p: &Project, s: &Settings, cancel: &Cancel) -> Result<()>
             }
         }
         if p.evidence_settings.background == "blur" {
-            if let Some(item) = seg.evidence_items.iter().find(|e| e.enabled) {
+            if let Some(item) = background_item(seg) {
                 if item.asset.is_some() {
                     let path = source_frame(
                         p,
@@ -620,7 +665,8 @@ fn prepare_backgrounds(p: &Project, s: &Settings, cancel: &Cancel) -> Result<()>
                 }
             }
         }
-        atomic_png(&path, &img)?;
+        process::check_cancel(cancel)?;
+        atomic_png(&path, &img).context("Không lưu được nền dẫn chứng; kiểm tra dung lượng và quyền ghi thư mục dự án")?;
     }
     Ok(())
 }
@@ -647,9 +693,9 @@ pub fn prepare(
             }
             progress(&format!("Trích dẫn chứng {} / {}", si + 1, ei + 1));
             let source = p.source(&item.source_id)?;
-            let raw = source_frame(p, s, source, item.source_time_ms, cancel)?;
+            let raw = if item.selection.text_only {None}else{Some(source_frame(p, s, source, item.source_time_ms, cancel)?)};
             let effective=effective_crop(item.crop,p.evidence_settings.crop_percent)?;
-            let first = crop_image(&image::open(&raw)?.to_rgba8(), effective);
+            let first = if let Some(raw)=&raw{crop_image(&image::open(raw)?.to_rgba8(), effective)}else{RgbaImage::new(1,1)};
             let second = if item.kind == "comparison" {
                 let source = p.source(if item.second_source_id.is_empty() {
                     &item.source_id
@@ -675,6 +721,7 @@ pub fn prepare(
             identity.asset = None;
             identity.annotation_asset = None;
             identity.asset_key.clear();
+            identity.selection = Default::default();
             identity.start_ms = 0;
             identity.duration_ms = 0;
             identity.anchor_phrase.clear();
@@ -689,7 +736,7 @@ pub fn prepare(
             let key = media::hash(
                 serde_json::to_vec(&(
                     &identity,
-                    crate::input_assets::file_fingerprint(&raw.to_string_lossy()),
+                    raw.as_ref().map(|raw|crate::input_assets::file_fingerprint(&raw.to_string_lossy())),
                     if item.kind == "comparison" {
                         crate::input_assets::file_fingerprint(
                             &p.source(if item.second_source_id.is_empty() {
@@ -704,7 +751,8 @@ pub fn prepare(
                         String::new()
                     },
                     p.evidence_settings.crop_percent,
-                    "evidence-card-v9-no-source-footer",
+                    "evidence-card-v10-verified-photo-or-quote",
+                    item.selection.text_only,
                     &p.rules.language,
                 ))
                 .unwrap_or_default(),
@@ -743,6 +791,9 @@ pub fn prepare(
 /// Explicitly hidden/deleted editor layers remain valid user edits.
 pub fn validate_prepared(p: &Project) -> Result<()> {
     if !p.evidence_settings.enabled { return Ok(()); }
+    if p.segments.iter().flat_map(|s|&s.evidence_items).any(|e|e.enabled&&e.selection.version==crate::evidence_selection::VERSION) {
+        crate::evidence_selection::validate(p)?;
+    }
     validate(p)?;
     for (si,seg) in p.segments.iter().enumerate() {
         for item in seg.evidence_items.iter().filter(|e|e.enabled) {
@@ -757,7 +808,7 @@ pub fn validate_prepared(p: &Project) -> Result<()> {
             })();
             check.with_context(||format!("Cảnh {} / dẫn chứng {}",si+1,item.label))?;
         }
-        if seg.kind=="host" && seg.evidence_items.iter().any(|e|e.enabled) {
+        if needed_backgrounds(p).iter().any(|s|s.id==seg.id) {
             image::image_dimensions(background_path(p,seg)).with_context(||format!("Cảnh {} thiếu nền dẫn chứng đúng khung hình",si+1))?;
         }
     }
@@ -770,9 +821,10 @@ pub fn validate_prepared(p: &Project) -> Result<()> {
     Ok(())
 }
 fn atomic_png(path: &Path, img: &RgbaImage) -> Result<()> {
-    let pending = path.with_extension("pending.png");
-    img.save(&pending)?;
-    fs::rename(pending, path)?;
+    fs::create_dir_all(path.parent().context("Thiếu thư mục ảnh")?)?;
+    let pending = tempfile::Builder::new().suffix(".png").tempfile_in(path.parent().unwrap())?;
+    img.save_with_format(pending.path(),image::ImageFormat::Png)?;
+    pending.persist(path).map_err(|e|e.error)?;
     Ok(())
 }
 pub fn source_frame(
@@ -782,6 +834,8 @@ pub fn source_frame(
     ms: u64,
     cancel: &Cancel,
 ) -> Result<PathBuf> {
+    process::check_cancel(cancel)?;
+    ensure!(source.path.is_file(),"Video nguồn '{}' không còn trên máy: {}. Khôi phục đúng file rồi thử lại.",source.id,source.path.display());
     let key = media::hash(format!(
         "frame-v1:{}:{ms}",
         crate::input_assets::file_fingerprint(&source.path.to_string_lossy())
@@ -794,7 +848,7 @@ pub fn source_frame(
         return Ok(path);
     }
     fs::create_dir_all(path.parent().unwrap())?;
-    let pending = path.with_extension("pending.png");
+    let pending = tempfile::Builder::new().suffix(".png").tempfile_in(path.parent().unwrap())?;
     process::run(
         &s.ffmpeg,
         &process::args(&[
@@ -809,7 +863,7 @@ pub fn source_frame(
             "scale=1920:1080:force_original_aspect_ratio=decrease",
             "-frames:v",
             "1",
-            &pending.to_string_lossy(),
+            &pending.path().to_string_lossy(),
         ]),
         None,
         cancel,
@@ -817,11 +871,12 @@ pub fn source_frame(
         None,
     )?;
     ensure!(
-        pending.is_file(),
+        image::image_dimensions(pending.path()).is_ok(),
         "Không lấy được khung hình tại {}",
         time(ms)
     );
-    fs::rename(pending, &path)?;
+    process::check_cancel(cancel)?;
+    pending.persist(&path).map_err(|e|e.error)?;
     Ok(path)
 }
 pub fn effective_crop(c:[f32;4],percent:f32)->Result<[f32;4]> {
@@ -854,7 +909,7 @@ mod crop_tests {
         }
     }
 }
-fn crop_image(img: &RgbaImage, c: [f32; 4]) -> RgbaImage {
+pub(crate) fn crop_image(img: &RgbaImage, c: [f32; 4]) -> RgbaImage {
     let (w, h) = img.dimensions();
     let x = (c[0] * w as f32).floor().min((w - 1) as f32) as u32;
     let y = (c[1] * h as f32).floor().min((h - 1) as f32) as u32;
@@ -867,7 +922,7 @@ fn crop_image(img: &RgbaImage, c: [f32; 4]) -> RgbaImage {
     )
     .to_image()
 }
-fn font() -> Result<FontArc> {
+pub(crate) fn font() -> Result<FontArc> {
     static FONT: std::sync::OnceLock<FontArc> = std::sync::OnceLock::new();
     if let Some(f) = FONT.get() {
         return Ok(f.clone());
@@ -921,11 +976,33 @@ fn text(
     lines: usize,
     color: [u8; 4],
 ) {
+    // Measure the actual font. Preserve explicit line breaks from editorial
+    // wrapping and fit all words instead of silently discarding the tail.
+    let rows_at=|size:f32| {
+        let scaled=f.as_scaled(PxScale::from(size));
+        let mut rows=vec![];
+        for paragraph in value.lines() {
+            let mut row=String::new();let mut used=0.;
+            for word in paragraph.split_whitespace() {
+                let ww:f32=word.chars().map(|c|scaled.h_advance(f.glyph_id(c))).sum();
+                let gap=if row.is_empty(){0.}else{scaled.h_advance(f.glyph_id(' '))};
+                if !row.is_empty() && used+gap+ww>width {rows.push(std::mem::take(&mut row));used=0.;}
+                if !row.is_empty(){row.push(' ');used+=gap;}
+                row.push_str(word);used+=ww;
+            }
+            if !row.is_empty(){rows.push(row);}
+        }rows
+    };
+    let mut size=size;
+    let mut rows=rows_at(size);
+    while rows.len()>lines && size>4. {size*=0.95;rows=rows_at(size);}
+    let display=rows.join("\n");
     let scaled = f.as_scaled(PxScale::from(size));
     let mut px = x;
     let mut py = y + scaled.ascent();
     let mut line = 0;
-    for word in value.split_whitespace() {
+    for word in display.split_inclusive('\n').flat_map(|s|s.split_whitespace().chain(s.ends_with('\n').then_some("\n"))) {
+        if word=="\n" {line+=1;px=x;py+=size*1.25;continue;}
         let word_w: f32 = word.chars().map(|c| scaled.h_advance(f.glyph_id(c))).sum();
         if px > x && px + word_w > x + width {
             line += 1;
@@ -1169,13 +1246,15 @@ fn card(
     second: Option<&RgbaImage>,
     language: &str,
 ) -> Result<(RgbaImage, RgbaImage)> {
+    if item.selection.text_only {return quote_card(item);}
     let data_card=matches!(item.kind.as_str(),"stat"|"fact");
     let photo_height=if let Some(second)=second {
         (370.*(first.height() as f32/first.width().max(1) as f32)
             .max(second.height() as f32/second.width().max(1) as f32)).round()
     }else{(760.*first.height() as f32/first.width().max(1) as f32).round()}.clamp(120.,840.) as u32;
     let photo_bottom=82+photo_height;
-    let height=photo_bottom+if data_card{116}else if second.is_some(){76}else{48};
+    let multiline=item.claim.lines().count()>1;
+    let height=photo_bottom+if data_card{if multiline{148}else{116}}else if second.is_some(){76}else{48};
     let mut img = RgbaImage::new(800, height);
     let mut ann = RgbaImage::new(800, height);
     let f = font()?;
@@ -1230,7 +1309,7 @@ fn card(
             photo_bottom as f32+48.,
             740.,
             19.,
-            1,
+            3,
             [50, 60, 70, 255],
         );
         rect
@@ -1315,6 +1394,14 @@ fn card(
         }
     }
     Ok((img, ann))
+}
+fn quote_card(item:&EvidenceItem)->Result<(RgbaImage,RgbaImage)> {
+    let mut img=RgbaImage::from_pixel(800,430,Rgba([255,255,255,255]));let ann=RgbaImage::new(800,430);let f=font()?;
+    for y in 74..80{for x in 28..772{img.put_pixel(x,y,Rgba([40,180,168,255]));}}
+    text(&mut img,&f,&item.label,28.,18.,744.,28.,2,[24,30,36,255]);
+    text(&mut img,&f,&format!("{} {}",item.value,item.unit),28.,102.,744.,34.,2,[227,81,50,255]);
+    text(&mut img,&f,&item.proof.quote,28.,202.,744.,25.,7,[45,57,70,255]);
+    Ok((img,ann))
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -76,6 +76,7 @@ pub struct LayerClip {
     #[serde(default)] pub group:Option<String>,
     #[serde(default)] pub motion:crate::evidence::Motion,
     #[serde(default)] pub timing_manual:bool,
+    #[serde(default,skip_serializing_if="Option::is_none")] pub sound_cue:Option<crate::evidence_sfx::SoundCue>,
 }
 impl LayerClip {
     pub fn source_at(&self,local:u64)->u64 {self.media_in_ms+crate::footage_speed::scaled(local,self.playback_rate)}
@@ -162,11 +163,11 @@ impl Composition {
                     start_ms:start,duration_ms:s.duration_ms,media_in_ms,playback_rate:1.,cue_in_ms:0,media,proxy,transform,
                     z:timeline::TRACK_ROLES[track].z(),
                     visible:true,locked:false,linked:true,gain:if track==timeline::ORIGINAL&&s.kind=="review" {1.}else{s.audio_gain},fade_in_ms:0,fade_out_ms:0,
-                    evidence_id:None,group:if track==timeline::GRAPHICS {Some(format!("{}:gfx",s.id))}else{None},motion:Default::default(),timing_manual:false });
+                    evidence_id:None,group:if track==timeline::GRAPHICS {Some(format!("{}:gfx",s.id))}else{None},motion:Default::default(),timing_manual:false,sound_cue:None });
             }
             for (index,cue) in s.graphics.iter().enumerate().filter(|(_,g)|!g.sound_suppressed&&g.start_ms<g.end_ms&&g.start_ms<s.duration_ms) {
                 if let Some((path,sound_duration))=crate::evidence_sfx::selected_sound(&p.card_sound.style,index,&cue.kind) {
-                    result.clips.push(LayerClip{id:format!("{}:gfx:{index}:{}",s.id,timeline::SFX),scene_id:s.id.clone(),track:timeline::SFX,start_ms:start+cue.start_ms,duration_ms:sound_duration.min(cue.end_ms.min(s.duration_ms)-cue.start_ms).max(1),media_in_ms:0,playback_rate:1.,cue_in_ms:0,media:Some(path),proxy:None,transform:Transform::default(),z:0,visible:true,locked:false,linked:false,gain:1.,fade_in_ms:5,fade_out_ms:40,evidence_id:None,group:Some(format!("{}:gfx",s.id)),motion:Default::default(),timing_manual:false});
+                    result.clips.push(LayerClip{id:format!("{}:gfx:{index}:{}",s.id,timeline::SFX),scene_id:s.id.clone(),track:timeline::SFX,start_ms:start+cue.start_ms,duration_ms:sound_duration.min(cue.end_ms.min(s.duration_ms)-cue.start_ms).max(1),media_in_ms:0,playback_rate:1.,cue_in_ms:0,media:Some(path),proxy:None,transform:Transform::default(),z:0,visible:true,locked:false,linked:false,gain:1.,fade_in_ms:5,fade_out_ms:40,evidence_id:None,group:Some(format!("{}:gfx",s.id)),motion:Default::default(),timing_manual:false,sound_cue:None});
                 }
             }
             if p.evidence_settings.enabled {
@@ -190,11 +191,11 @@ impl Composition {
                         let reveal=if track==timeline::ANNOTATION{150.min(motion_duration/3)}else{0};
                         let delay=reveal.saturating_sub(item.motion_in_ms);if delay>=duration{continue;}
                         let kind=if stack&&item.transition=="slide_fade"{"stack_pop".into()}else{item.transition.clone()};
-                        result.clips.push(LayerClip{id:format!("{group}:{track}"),scene_id:s.id.clone(),track,start_ms:start+cue+delay,duration_ms:duration-delay,media_in_ms:0,playback_rate:1.,cue_in_ms:item.motion_in_ms+delay,media:Some(p.root.join(asset)),proxy:None,transform:transform.clone(),z:if stack{11+index as i32*2+if track==timeline::ANNOTATION{1}else{0}}else{timeline::TRACK_ROLES[track].z()},visible:true,locked:false,linked:false,gain:1.,fade_in_ms:0,fade_out_ms:0,evidence_id:Some(item.id.clone()),group:Some(group.clone()),motion:crate::evidence::Motion{kind,duration_ms:motion_duration,zoom:item.zoom||p.evidence_settings.motion=="zoom",drift:p.evidence_settings.motion=="drift",delay_ms:reveal,backdrop_ms:if stack{windows[index].2.map(|t|t+item.motion_in_ms)}else{None}},timing_manual:false});
+                        result.clips.push(LayerClip{id:format!("{group}:{track}"),scene_id:s.id.clone(),track,start_ms:start+cue+delay,duration_ms:duration-delay,media_in_ms:0,playback_rate:1.,cue_in_ms:item.motion_in_ms+delay,media:Some(p.root.join(asset)),proxy:None,transform:transform.clone(),z:if stack{11+index as i32*2+if track==timeline::ANNOTATION{1}else{0}}else{timeline::TRACK_ROLES[track].z()},visible:true,locked:false,linked:false,gain:1.,fade_in_ms:0,fade_out_ms:0,evidence_id:Some(item.id.clone()),group:Some(group.clone()),motion:crate::evidence::Motion{kind,duration_ms:motion_duration,zoom:item.zoom||p.evidence_settings.motion=="zoom",drift:p.evidence_settings.motion=="drift",delay_ms:reveal,backdrop_ms:if stack{windows[index].2.map(|t|t+item.motion_in_ms)}else{None}},timing_manual:false,sound_cue:None});
                     }
                     if item.motion_in_ms==0&&item.asset.is_some() {
                         if let Some((path,sound_duration))=crate::evidence_sfx::selected_sound(&p.evidence_settings.sound_style,index,&item.kind){
-                            result.clips.push(LayerClip{id:format!("{group}:{}",timeline::SFX),scene_id:s.id.clone(),track:timeline::SFX,start_ms:start+cue,duration_ms:sound_duration.min(duration).max(1),media_in_ms:0,playback_rate:1.,cue_in_ms:0,media:Some(path),proxy:None,transform:Transform::default(),z:0,visible:true,locked:false,linked:false,gain:p.evidence_settings.sound_gain,fade_in_ms:5,fade_out_ms:40,evidence_id:Some(item.id.clone()),group:Some(group.clone()),motion:Default::default(),timing_manual:false});
+                            result.clips.push(LayerClip{id:format!("{group}:{}",timeline::SFX),scene_id:s.id.clone(),track:timeline::SFX,start_ms:start+cue,duration_ms:sound_duration.min(duration).max(1),media_in_ms:0,playback_rate:1.,cue_in_ms:0,media:Some(path),proxy:None,transform:Transform::default(),z:0,visible:true,locked:false,linked:false,gain:p.evidence_settings.sound_gain,fade_in_ms:5,fade_out_ms:40,evidence_id:Some(item.id.clone()),group:Some(group.clone()),motion:Default::default(),timing_manual:false,sound_cue:None});
                         }
                     }
                 }
@@ -229,6 +230,7 @@ impl Composition {
                 c.transform.contain_aspect(ch as f32/cw.max(1) as f32,w as u32,h as u32);
             }
         }}
+        crate::evidence_sfx::identify_cues(p,&mut result);
         result
     }
     pub fn validate(&self)->Result<()> {
@@ -374,7 +376,7 @@ impl Project {
         self.composition.as_mut().unwrap().timing(id,start,trim,duration)
     }
     pub fn composition_snapshot(&self)->Composition {
-        if let Some(c)=&self.composition { if c.version==4&&c.script_key==Composition::key(self) {let mut c=c.clone();c.upgrade_host_aspect(self);Self::sync_music(&mut c,crate::background_music::clip(self));return c;} }
+        if let Some(c)=&self.composition { if c.version==4&&c.script_key==Composition::key(self) {let mut c=c.clone();c.upgrade_host_aspect(self);crate::evidence_sfx::refresh_composition(self,&mut c);Self::sync_music(&mut c,crate::background_music::clip(self));return c;} }
         Composition::from_project(self)
     }
     pub fn ensure_composition(&mut self) {
@@ -446,12 +448,17 @@ impl Project {
         let media:Vec<_>=self.composition.as_ref().into_iter().flat_map(|c|c.clips.iter()).filter_map(|c|{
             if c.track==timeline::SFX{return None;}
             let s=self.segments.iter().find(|s|s.id==c.scene_id)?;
-            if c.track==BACKGROUND&&s.kind=="host"{return Some((c.id.clone(),crate::evidence::background_path(self,s)));}
+            if c.track==BACKGROUND&&s.kind=="host"&&c.media.as_ref().is_some_and(|m|crate::evidence::generated_background(m)){return Some((c.id.clone(),crate::evidence::background_path(self,s)));}
             let id=c.evidence_id.as_ref()?;let e=s.evidence_items.iter().find(|e|&e.id==id)?;
             let asset=if c.track==timeline::ANNOTATION{e.annotation_asset.as_ref()}else{e.asset.as_ref()}?;
             Some((c.id.clone(),self.root.join(asset)))
         }).collect();
         if let Some(c)=&mut self.composition{for clip in &mut c.clips{if let Some((_,path))=media.iter().find(|(id,_)|id==&clip.id){clip.media=Some(path.clone());}}}
+        if let Some(mut comp)=self.composition.take() {
+            if crate::evidence_sfx::refresh_composition(self,&mut comp)>0 {self.rendered=None;}
+            crate::evidence_sfx::identify_cues(self,&mut comp);
+            self.composition=Some(comp);
+        }
         let music=crate::background_music::clip(self);
         if let Some(comp)=&mut self.composition{Self::sync_music(comp,music);}
     }

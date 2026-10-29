@@ -118,6 +118,7 @@ pub fn export(p:&Project,s:&Settings,output:&Path,cancel:&Cancel)->Result<()> {
 }
 
 pub fn export_with_progress<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,mut progress:F)->Result<()> {
+    let mut prepared=p.clone();prepared.ensure_composition();let p=&prepared;
     let clock=Instant::now();
     let mut report=RenderReport{renderer:RENDERER,status:"running",..Default::default()};
     let result=export_inner(p,s,output,cancel,&mut progress,&mut report);
@@ -129,22 +130,34 @@ pub fn export_with_progress<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:
 }
 
 pub(crate) fn validate_assets(p:&Project)->Result<()> {
+    validate_assets_inner(p,false)
+}
+/// Read-only batch planning accepts a missing generated background, which the
+/// actual renderer repairs. User media still has to exist at this point.
+pub(crate) fn validate_export_inputs(p:&Project)->Result<()> {
+    validate_assets_inner(p,true)
+}
+fn validate_assets_inner(p:&Project,repairable:bool)->Result<()> {
     let composition=p.composition_snapshot();composition.validate()?;
     crate::evidence::validate(p)?;
     p.music.validate()?;
     for c in composition.clips.iter().filter(|c|c.enabled(p)&&c.track!=timeline::MUSIC) {
-        if let Some(media)=&c.media {anyhow::ensure!(media.is_file(),"Thiếu media của layer '{}': {}",c.id,media.display());}
+        if let Some(media)=&c.media {anyhow::ensure!(media.is_file()||(repairable&&repairable_background(p,c)),"Thiếu media của layer '{}': {}",c.id,media.display());}
     }
     for seg in p.segments.iter().filter(|_|p.evidence_settings.enabled){for item in seg.evidence_items.iter().filter(|e|e.enabled){
         anyhow::ensure!(item.asset.as_ref().is_some_and(|a|p.root.join(a).is_file()),"Dẫn chứng '{}' chưa tạo thẻ; mở Dẫn chứng → Tạo thẻ / cập nhật",item.label);
     }}
     for c in composition.clips.iter().filter(|c|!c.audio()&&c.enabled(p)&&(c.evidence_id.is_some()||(c.track==BACKGROUND&&c.still()))){
-        anyhow::ensure!(c.media.as_ref().is_some_and(|m|m.is_file()),"Thiếu ảnh dẫn chứng cho layer {}",c.id);
+        anyhow::ensure!(c.media.as_ref().is_some_and(|m|m.is_file())||(repairable&&repairable_background(p,c)),"Thiếu ảnh dẫn chứng cho layer {}",c.id);
     }
     Ok(())
 }
+fn repairable_background(p:&Project,c:&LayerClip)->bool {
+    c.track==BACKGROUND && p.segments.iter().any(|seg|seg.id==c.scene_id&&seg.kind=="host"&&c.media.as_ref()==Some(&crate::evidence::background_path(p,seg)))
+}
 
 fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,progress:&mut F,report:&mut RenderReport)->Result<()> {
+    crate::evidence::prepare_backgrounds(p,s,cancel).context("Không cập nhật được nền dẫn chứng từ nguồn đã tải; kiểm tra video nguồn rồi thử xuất lại")?;
     crate::background_music::prepare(p,s,cancel)?;
     p.card_sound.validate()?;
     let metadata=crate::export_metadata::prepare(p,s)?;
@@ -175,7 +188,7 @@ fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel
             clip.duration_ms=c.end().min(b)-c.start_ms.max(a);clips.push(clip);
         }
         // A hidden/empty interval still has a duration and must export as blank.
-        if clips.is_empty() {clips.push(LayerClip{id:"blank".into(),scene_id:String::new(),track:BACKGROUND,start_ms:0,duration_ms:b-a,media_in_ms:0,playback_rate:1.,cue_in_ms:0,media:None,proxy:None,transform:Transform::default(),z:0,visible:false,locked:false,linked:false,gain:0.,fade_in_ms:0,fade_out_ms:0,evidence_id:None,group:None,motion:Default::default(),timing_manual:false});}
+        if clips.is_empty() {clips.push(LayerClip{id:"blank".into(),scene_id:String::new(),track:BACKGROUND,start_ms:0,duration_ms:b-a,media_in_ms:0,playback_rate:1.,cue_in_ms:0,media:None,proxy:None,transform:Transform::default(),z:0,visible:false,locked:false,linked:false,gain:0.,fade_in_ms:0,fade_out_ms:0,evidence_id:None,group:None,motion:Default::default(),timing_manual:false,sound_cue:None});}
         // Hash only script cues consumed by this interval. A different evidence
         // card in the same scene must not invalidate an unrelated interval.
         let scenes:Vec<_>=clips.iter().filter_map(|c|p.segments.iter().find(|s|s.id==c.scene_id).map(|s|{

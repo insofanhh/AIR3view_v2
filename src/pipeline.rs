@@ -4,7 +4,7 @@ use crate::{
     process::{self, Cancel},
     providers, subtitle,
 };
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use std::{fs, path::PathBuf, sync::mpsc::Sender, thread, time::Duration};
 
 #[derive(Debug)]
@@ -196,6 +196,9 @@ pub fn prepare(mut p: Project, s: Settings, tx: Sender<Event>, cancel: Cancel) -
         crate::diagnostics::record(&p.root,"Analysis",None,"url-fallback",serde_json::json!({"error":format!("{:#}",analysis.as_ref().unwrap_err())}))?;
         p.save()?;
         analysis=providers::analyze_progress(&p,&s,&cancel,true,&tx);
+    }
+    if download.is_ok() {
+        analysis=analysis.and_then(|plan|providers::finish_source_review(&p,&s,&cancel,plan,Some(&tx)));
     }
     if let Ok(plan) = &analysis {
         apply_plan(&mut p,plan.clone())?;
@@ -390,54 +393,122 @@ pub fn generate_speech(
 }
 
 /// Evidence extraction owns no project writes while speech/avatar checkpoints advance.
-pub fn generate_assets(p:Project,s:Settings,tx:Sender<Event>,cancel:Cancel)->Result<Project> {
+pub fn generate_assets(mut p:Project,s:Settings,tx:Sender<Event>,cancel:Cancel)->Result<Project> {
+    if crate::us_editorial::enabled(&p.rules) {
+        let plan=crate::script_quality::plan(&p);
+        let mut report=crate::script_quality::inspect(&p,&plan,&s,false);
+        // Timing after partial WAV generation belongs to the measured recovery
+        // below. Do not spend the editorial repair budget on those mismatches.
+        report.issues.retain(|i|!matches!(i.code.as_str(),"DURATION"|"US_RAW_CADENCE"));
+        crate::us_editorial::review(&p,&s,&plan,&cancel,&mut report)?;
+        if !report.issues.is_empty() {
+            stage(&tx,"Analysis","Kiểm tra lại nội dung US trước giọng/nhân vật",false);
+            let plan=providers::finish_source_review(&p,&s,&cancel,plan,Some(&tx))?;
+            apply_plan(&mut p,plan)?;checkpoint(&p,&tx)?;
+        }
+    }
     thread::scope(|scope| {
         let revision=evidence_revision(&p);
+        let evidence_input=p.clone();
         let mut cards=p.clone();let es=s.clone();let etx=tx.clone();let ecancel=cancel.clone();
         let worker=scope.spawn(move || {
-            let result=crate::evidence::prepare(&mut cards,&es,&ecancel,|msg|stage(&etx,"Dẫn chứng",msg,false));
+            let result=prepare_evidence(&mut cards,&es,&ecancel,&etx);
             (cards,result)
         });
         let root=p.root.clone();let result=generate_assets_core(p,s.clone(),tx.clone(),cancel.clone());
         let (cards,evidence_result)=worker.join().map_err(|_|anyhow::anyhow!("Worker dẫn chứng bị dừng"))?;
         let mut p=match result {Ok(p)=>p,Err(error)=>{
             // Keep completed cards alongside the most recent speech/avatar checkpoint.
-            if let Ok(mut saved)=Project::load(&root.join("project.json")){merge_evidence(&mut saved,&cards);let _=checkpoint(&saved,&tx);}
+            if let Ok(mut saved)=Project::load(&root.join("project.json")){merge_evidence(&mut saved,&cards,&evidence_input);let _=checkpoint(&saved,&tx);}
             return Err(error);
         }};
-        merge_evidence(&mut p,&cards);crate::evidence::align(&mut p);p.ensure_composition();
+        merge_evidence(&mut p,&cards,&evidence_input);crate::evidence::align(&mut p);p.ensure_composition();
         // A measured-duration repair can replace scene/item IDs while the worker
         // still owns the original script. Reconcile against the final script.
         let revised=revision!=evidence_revision(&p);
-        if revised || evidence_result.is_err() || crate::evidence::validate_prepared(&p).is_err() {
-            crate::diagnostics::record(&p.root,"Dẫn chứng",None,"reconcile_final_script",serde_json::json!({"script_changed":revised,"worker_failed":evidence_result.is_err()}))?;
+        // A failed provider call must not immediately repeat for an unchanged
+        // script. Speech/avatar checkpoints are already saved for resume.
+        if !revised {
+            if let Err(error)=evidence_result { checkpoint(&p,&tx)?; return Err(error.context("Chưa hoàn tất đối chiếu ảnh dẫn chứng; giọng và avatar đã lưu. Thử lại sau khi kiểm tra kết nối/model.")); }
+        }
+        if revised || crate::evidence::validate_prepared(&p).is_err() {
+            crate::diagnostics::record(&p.root,"Dẫn chứng",None,"reconcile_final_script",serde_json::json!({"script_changed":revised}))?;
             stage(&tx,"Dẫn chứng","Đối chiếu và cập nhật ảnh theo kịch bản cuối; tái sử dụng frame đã lưu",false);
-            let result=crate::evidence::prepare(&mut p,&s,&cancel,|msg|stage(&tx,"Dẫn chứng",msg,false));
+            let result=prepare_evidence(&mut p,&s,&cancel,&tx);
             p.ensure_composition();checkpoint(&p,&tx)?;
             result?;
         }
         checkpoint(&p,&tx)?;
+        crate::evidence_selection::validate(&p)?;
         crate::evidence::validate_prepared(&p).inspect_err(|e|{let _=crate::diagnostics::failure(&p.root,"Dẫn chứng",None,e);})?;
+        crate::host_evidence::report(&p,true)?;
+        crate::host_evidence::validate(&p,true)?;
         crate::diagnostics::record(&p.root,"Dẫn chứng",None,"validated",serde_json::json!({"items":p.segments.iter().flat_map(|s|&s.evidence_items).filter(|e|p.evidence_settings.enabled&&e.enabled).count()}))?;
         stage(&tx,"Dẫn chứng","Ảnh và layer dẫn chứng của kịch bản cuối đã kiểm tra đầy đủ",true);Ok(p)
     })
 }
 fn evidence_revision(p:&Project)->String {
-    let ids:Vec<_>=p.segments.iter().map(|s|(&s.id,&s.kind,s.evidence_items.iter().map(|e|(&e.id,e.enabled)).collect::<Vec<_>>())).collect();
-    media::hash(serde_json::to_vec(&(&p.rules.language,&p.evidence_settings,p.output.portrait,ids)).unwrap())
+    media::hash(serde_json::to_vec(&(&p.rules.language,&p.evidence_settings,p.output.portrait,crate::evidence_selection::revision(p))).unwrap())
 }
-fn merge_evidence(p:&mut Project,cards:&Project) {
+fn merge_evidence(p:&mut Project,cards:&Project,baseline:&Project) {
+    // A duration repair can keep an ID while changing its claim/crop. Only
+    // merge the worker result if every source/content input still matches.
+    let view=&*p;
+    let mut added=vec![];
+    for done in &cards.segments {
+        let Some(current)=view.segments.iter().find(|s|s.id==done.id) else{continue;};
+        let Some(base)=baseline.segments.iter().find(|s|s.id==done.id) else{continue;};
+        let signature=|project:&Project,seg:&Segment|seg.evidence_items.iter().map(|e|
+            (e.id.clone(),e.enabled,crate::evidence_selection::request_key(project,seg,e),crate::evidence_selection::protected(project,seg,e))).collect::<Vec<_>>();
+        if current.locked || current.narration!=base.narration || current.source_id!=base.source_id
+            || current.in_ms!=base.in_ms || current.out_ms!=base.out_ms
+            || signature(view,current)!=signature(baseline,base) {continue;}
+        for card in &done.evidence_items {
+            if crate::host_evidence::automatic(card,&done.id) && !base.evidence_items.iter().any(|e|e.id==card.id)
+                && !current.evidence_items.iter().any(|e|e.id==card.id)
+                && card.selection.key==crate::evidence_selection::request_key(view,current,card)
+                && !view.timeline.tracks[crate::timeline::EVIDENCE].locked
+                && !view.timeline.tracks[crate::timeline::ANNOTATION].locked {added.push((done.id.clone(),card.clone()));}
+        }
+    }
+    let keys:std::collections::HashMap<_,_>=view.segments.iter().flat_map(|s|s.evidence_items.iter()
+        .filter(move|e|baseline.segments.iter().find(|old|old.id==s.id).is_some_and(|old|{
+            old.evidence_items.iter().find(|item|item.id==e.id).is_some_and(|item|
+                crate::evidence::content_identity(item)==crate::evidence::content_identity(e)
+                && crate::evidence_selection::protected(baseline,old,item)==crate::evidence_selection::protected(view,s,e))
+        }))
+        .map(move|e|(e.id.clone(),crate::evidence_selection::request_key(view,s,e)))).collect();
     for seg in &mut p.segments {if let Some(done)=cards.segments.iter().find(|s|s.id==seg.id){for item in &mut seg.evidence_items{
         if let Some(card)=done.evidence_items.iter().find(|e|e.id==item.id){
+            let valid=keys.get(&item.id).is_some_and(|k|k==&card.selection.request_key||k==&card.selection.key);
+            if !valid {continue;}
             item.asset=card.asset.clone();item.annotation_asset=card.annotation_asset.clone();item.asset_key=card.asset_key.clone();
+            item.source_time_ms=card.source_time_ms;item.crop=card.crop;item.second_time_ms=card.second_time_ms;item.second_crop=card.second_crop;
+            item.frame_id=card.frame_id.clone();item.coordinate_space=card.coordinate_space.clone();item.selection=card.selection.clone();item.enabled=card.enabled;
+            item.annotations=card.annotations.clone();
             if item.proof.formula=="delta_ms" {item.value=card.value.clone();item.unit=card.unit.clone();}
         }
     }}}
+    for (scene,card) in added {if let Some(seg)=p.segments.iter_mut().find(|s|s.id==scene) {if seg.evidence_items.len()<4 {seg.evidence_items.push(card);}}}
+    for warning in &cards.script_warnings {if !p.script_warnings.contains(warning){p.script_warnings.push(warning.clone());}}
+}
+fn prepare_evidence(p:&mut Project,s:&Settings,cancel:&Cancel,tx:&Sender<Event>)->Result<()> {
+    crate::host_evidence::prepare(p,s,cancel,|msg|stage(tx,"Dẫn chứng",msg,false))?;
+    crate::evidence::prepare(p,s,cancel,|msg|stage(tx,"Dẫn chứng",msg,false))?;
+    crate::evidence_selection::validate(p)?;
+    crate::evidence_selection::write_report(p)
 }
 pub fn generate_evidence(mut p:Project,s:Settings,tx:Sender<Event>,cancel:Cancel)->Result<Project> {
-    let result=crate::evidence::prepare(&mut p,&s,&cancel,|msg|stage(&tx,"Dẫn chứng",msg,false));
-    p.ensure_composition();p.rendered=None;checkpoint(&p,&tx)?;result?;
+    let backup=p.root.join("analysis/evidence-backups").join(format!("{}.json",uuid::Uuid::new_v4()));
+    write_json(&backup,&p)?;
+    // Only publish a successful selection + rasterization. Failed/cancelled
+    // review keeps the active project's cards and rendered preview intact.
+    prepare_evidence(&mut p,&s,&cancel,&tx)?;
+    p.ensure_composition();p.rendered=None;
     crate::evidence::validate_prepared(&p)?;
+    crate::host_evidence::report(&p,true)?;
+    crate::host_evidence::validate(&p,true)?;
+    checkpoint(&p,&tx)?;
     stage(&tx,"Dẫn chứng","Đã cập nhật thẻ, giữ nguyên giọng và avatar",true);Ok(p)
 }
 
@@ -474,12 +545,33 @@ fn generate_assets_core(
         false,
     );
     let mut p = generate_speech(p, s.clone(), tx.clone(), cancel.clone())?;
-    for round in 1..=if p.sources.is_empty(){0}else{crate::script_quality::MAX_REPAIRS} {
+    for _ in 0..=crate::duration_recovery::MAX_AI_REPAIRS {
         // Check measured segments, not a prior editor composition.
         let mut measured=p.clone();measured.composition=None;
-        if measured.check_duration().is_ok(){break;}
+        if crate::footage_speed::enabled(&measured) { crate::footage_speed::fit(&mut measured)?; }
+        let editorial=crate::script_quality::inspect(&measured,&crate::script_quality::plan(&measured),&s,true);
+        if measured.check_duration().is_ok() && (!crate::us_editorial::enabled(&measured.rules)||editorial.issues.is_empty()){break;}
+        let state = crate::duration_recovery::Recovery::load(&p, &s)?;
+        let mismatch = crate::duration_recovery::Mismatch::from_project(&measured);
+        if mismatch.as_ref().is_some_and(|m|m.shortfall()>0 && m.shortfall()<=crate::duration_recovery::SMALL_SHORTFALL_MS) {
+            // First surface the typed failure to the same checkpoint retry path
+            // used by the UI. On recovery, try real source time before asking AI.
+            if state.auto_attempts == 0 { break; }
+            if crate::duration_recovery::extend_short_source(&mut measured)? {
+                measured.composition=p.composition.take();p=measured;checkpoint(&p,&tx)?;
+                stage(&tx,"Phục hồi thời lượng","Đã bổ sung footage hợp lệ; giữ nguyên giọng và Độ dài đã đặt",false);
+                break;
+            }
+        }
+        if p.sources.is_empty() { break; }
+        // Give AI the measured source clock, including hook/intercut speed,
+        // rather than the source intervals' previous unretimed estimates.
+        measured.composition=p.composition.take();p=measured;
+        checkpoint(&p,&tx)?;
+        let Some(round) = crate::duration_recovery::Recovery::reserve_ai(&p, &s)? else { break; };
         stage(&tx,"Audio",&format!("Đang sửa lượng lời theo audio thật ({round}/2), giữ WAV không đổi"),false);
         crate::diagnostics::record(&p.root,"Audio",None,"duration_repair",serde_json::json!({"round":round,"measured_ms":p.duration_ms()}))?;
+        write_json(&p.root.join("analysis/duration-backups").join(format!("before-{round}.json")),&p)?;
         match providers::repair_duration(&p,&s,&cancel,round) {
             Ok(plan)=> {
                 apply_plan(&mut p,plan)?;
@@ -489,7 +581,9 @@ fn generate_assets_core(
             Err(e)=> {
                 process::check_cancel(&cancel)?;
                 crate::diagnostics::failure(&p.root,"Duration",None,&e)?;
-                if round==crate::script_quality::MAX_REPAIRS {return Err(e.context("Không thể khớp thời lượng sau 2 lượt sửa; WAV đã tạo được giữ lại"));}
+                if !providers::retryable_timing_repair(&e) {
+                    return Err(e.context("Không sửa được lời theo thời lượng; WAV và kịch bản trước sửa được giữ lại"));
+                }
             }
         }
     }
@@ -509,6 +603,13 @@ fn generate_assets_core(
         footage_changes = fit_review_footage(&mut fitted)?;
         fitted.validate(true)?;
         fitted.validate_intercuts()?;
+        if crate::us_editorial::enabled(&fitted.rules) {
+            let plan=crate::script_quality::plan(&fitted);
+            let mut report=crate::script_quality::inspect(&fitted,&plan,&s,true);
+            crate::us_editorial::review(&fitted,&s,&plan,&cancel,&mut report)?;
+            write_json(&fitted.root.join("analysis/validation-report.json"),&report)?;
+            ensure!(report.issues.is_empty(),"Kiểm tra kịch bản US sau WAV chưa đạt: {}",report.message());
+        }
         Ok(())
     })();
     checkpoint(&p, &tx)?;
@@ -913,4 +1014,63 @@ pub fn diagnostics(s: &Settings) -> String {
         ));
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod evidence_merge_tests {
+    use super::*;
+    #[test]
+    fn generated_host_photo_survives_worker_merge_but_not_later_manual_edits() {
+        let p=Project{sources:vec![Source{id:"src".into(),duration_ms:10000,..Default::default()}],
+            segments:vec![Segment{id:"host".into(),kind:"host".into(),source_id:"src".into(),out_ms:9000,
+                duration_ms:5000,narration:"Officers approach the doorway.".into(),..Default::default()}],..Default::default()};
+        let mut worker=p.clone();assert_eq!(crate::host_evidence::seed_missing(&mut worker),1);
+        let key=crate::evidence_selection::request_key(&worker,&worker.segments[0],&worker.segments[0].evidence_items[0]);
+        let card=&mut worker.segments[0].evidence_items[0];card.selection.key=key;card.selection.status="accepted".into();card.asset=Some("verified.png".into());
+        let mut merged=p.clone();merge_evidence(&mut merged,&worker,&p);
+        assert_eq!(merged.segments[0].evidence_items.len(),1);
+        merge_evidence(&mut merged,&worker,&p);assert_eq!(merged.segments[0].evidence_items.len(),1);
+        for edit in 0..4 {
+            let mut changed=p.clone();match edit {
+                0=>changed.segments[0].narration.push_str(" edited"),
+                1=>changed.segments[0].locked=true,
+                2=>changed.timeline.tracks[crate::timeline::EVIDENCE].locked=true,
+                _=>changed.segments[0].evidence_items.push(Default::default()),
+            }
+            let count=changed.segments[0].evidence_items.len();merge_evidence(&mut changed,&worker,&p);
+            assert_eq!(changed.segments[0].evidence_items.len(),count,"stale worker appended over edit {edit}");
+        }
+    }
+    #[test]
+    fn stale_same_id_worker_cannot_overwrite_new_claim_and_preserves_manual_timing() {
+        let mut p=Project {segments:vec![Segment{id:"scene".into(),narration:"original review".into(),duration_ms:5000,
+            evidence_items:vec![crate::evidence::EvidenceItem{id:"card".into(),claim:"original subject".into(),
+                start_ms:1000,duration_ms:2500,timing_manual:true,..Default::default()}],..Default::default()}],..Default::default()};
+        let mut worker=p.clone();
+        let baseline=p.clone();
+        let key=crate::evidence_selection::request_key(&p,&p.segments[0],&p.segments[0].evidence_items[0]);
+        let card=&mut worker.segments[0].evidence_items[0];
+        card.selection.request_key=key;
+        card.crop=[0.,0.,1.,1.];card.asset=Some("verified.png".into());
+        p.segments[0].evidence_items[0].claim="new subject using the same id".into();
+        merge_evidence(&mut p,&worker,&baseline);
+        assert!(p.segments[0].evidence_items[0].asset.is_none());
+        p.segments[0].evidence_items[0].claim="original subject".into();
+        p.segments[0].evidence_items[0].start_ms=1500;
+        merge_evidence(&mut p,&worker,&baseline);
+        let item=&p.segments[0].evidence_items[0];
+        assert_eq!(item.asset.as_deref(),Some(std::path::Path::new("verified.png")));
+        assert_eq!(item.start_ms,1500);assert_eq!(item.duration_ms,2500);assert!(item.timing_manual);
+        assert_eq!(p.segments[0].duration_ms,5000);
+        for edit in 0..3 {
+            let mut changed=baseline.clone();
+            match edit {
+                0=>changed.segments[0].evidence_items[0].enabled=false,
+                1=>changed.segments[0].locked=true,
+                _=>changed.segments[0].evidence_items[0].annotations.push(Default::default()),
+            }
+            merge_evidence(&mut changed,&worker,&baseline);
+            assert!(changed.segments[0].evidence_items[0].asset.is_none(),"worker overwrote an edit made after it started");
+        }
+    }
 }

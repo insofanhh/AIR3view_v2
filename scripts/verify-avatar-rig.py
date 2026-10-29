@@ -25,7 +25,11 @@ def verify(runtime, output):
     sys.path.insert(0, str(runtime / "workers"))
     from PIL import Image, ImageDraw
     from gesture_rig import FOREARM, UPPER_ARM, _hand, arm_pose
-    from cartoon_render import frame, frame_dimensions
+    from cartoon_render import frame, frame_dimensions, emotion_kind
+
+    for label, expected in {"Shocked":"surprised", "Serious":"serious", "Tense":"concerned",
+                            "Somber":"concerned", "concerned":"concerned", "curious":"curious"}.items():
+        assert emotion_kind(label) == expected, (label, emotion_kind(label))
 
     kinds = ["none", "open_palms", "point", "beat", "surprised"]
     samples = 0

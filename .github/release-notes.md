@@ -1,4 +1,18 @@
-## AIR3view 0.2.11: sửa lỗi tạo hàng đợi với nhân vật 2D và giọng tham chiếu
+## AIR3view 0.2.12: SFX rõ ràng hơn, dẫn chứng và phục hồi dự án
+
+- Tách rõ âm thanh **Thẻ thông tin / số liệu** và **Ảnh dẫn chứng**; thêm **Nghe**, **Đồng bộ loại SFX** và **Áp dụng lại cho nhóm**. Nút SFX nằm đầu thanh timeline để dễ tìm ở cửa sổ nhỏ.
+- Thay bộ âm thanh Whoosh bằng **Paper tear**, Ting bằng **Appear**, Pop bằng bản mới đã cắt khoảng lặng. Cập nhật thư viện âm cho dự án cũ, giữ file âm riêng và các chỉnh sửa hình/giọng. MP4 đã xuất cần xuất lại.
+- Đổi SFX khi preview layer đang phát không khởi động lại hình/voice; clip sao chép giữ loại cue, tôn trọng khóa và timing đã chỉnh tay. Xuất lại sau khi chỉ đổi âm dùng lại cache hình.
+- Bổ sung đối chiếu ảnh dẫn chứng với nguồn, trạng thái chọn/loại và chọn lại ảnh. Kiểm tra ảnh cho cảnh Host trước khi báo hoàn tất; lỗi giữ checkpoint giọng/avatar để tiếp tục xử lý.
+- Cải thiện lưu và phục hồi tài nguyên giọng/ảnh dùng chung giữa các dự án, bảo vệ tài nguyên còn được dự án khác sử dụng khi xóa.
+- Cập nhật prompt True Crime / Bodycam, hướng dẫn lời nói tiếng Anh, đồng bộ cảm xúc và giới hạn thẻ. Quy tắc văn phong được xử lý theo hướng hướng dẫn; các kiểm tra dữ kiện, thời lượng và cấu trúc vẫn được giữ.
+- Bổ sung phục hồi thời lượng thiếu và các kiểm thử hồi quy cho pipeline, dự án cũ, preview và MP4.
+
+**Kiểm thử trên máy phát triển:** 223 kiểm thử Rust đạt, 2 bài kiểm thử ngoài bỏ qua trong lượt chạy thường; kiểm thử riêng SFX trên 8 dự án, 96 trường hợp chọn âm theo nhóm và 16 đoạn MP4 thử nghiệm. Đã đối chiếu âm thanh, cache hình, UI 1080×720 / 1440×900 và kiểm thử cập nhật/khôi phục. GitHub Actions tiếp tục chạy toàn bộ bộ kiểm thử, Clippy, updater, đóng gói, TTS, avatar và Whisper trước khi công bố.
+
+**Cập nhật:** bấm **Cập nhật** trong app để tự tải, cài và mở lại. Người cài mới tải **AIR3view-0.2.12-windows-x64.zip**, giải nén đầy đủ rồi mở **AIR3view.exe**. Dữ liệu và cấu hình giữ theo máy; key, cookie và dữ liệu dự án không nằm trong gói phát hành.
+
+### Tính năng từ 0.2.11: sửa lỗi tạo hàng đợi với nhân vật 2D và giọng tham chiếu
 
 - Sửa lỗi **Không tạo được hàng đợi: Không đọc được ảnh/giọng tham chiếu** khi chọn nhân vật **2D local** nhưng cấu hình còn đường dẫn ảnh HeyGen cũ đã bị xóa. Hàng đợi chỉ sao chép tài nguyên đang dùng; nhân vật 2D không phụ thuộc ảnh HeyGen cũ.
 - Giọng tham chiếu đang bật vẫn được sao chép riêng vào từng dự án con. Bỏ đường dẫn giọng khi tắt tham chiếu và đường dẫn ảnh khi tắt nhân vật; giữ nguyên thiết lập dự án mẫu.

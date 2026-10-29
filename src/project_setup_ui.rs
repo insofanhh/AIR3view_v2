@@ -254,7 +254,7 @@ impl StudioApp {
             r.max_seconds,
             crate::content_language::label(&r.language),
             if r.hook_enabled { "3–7 s" } else { "tắt" },
-            if r.intercuts_enabled {r.intercut_count}else{0}
+            if r.intercuts_enabled {crate::us_editorial::intercut_count(r)}else{0}
         );
         section(ui, "setup_script", "01 / Kịch bản", summary, |ui| {
             settings_group(ui, "script_basics", "Độ dài & ngôn ngữ", true, |ui| {
@@ -293,14 +293,13 @@ impl StudioApp {
             });
             settings_group(ui, "script_prompt", "Prompt & phong cách", false, |ui| {
             ui.label("Prompt / phong cách / yêu cầu riêng");
-            ui.add(
-                egui::TextEdit::multiline(&mut self.project.rules.prompt)
-                    .desired_width(f32::INFINITY)
-                    .desired_rows(5),
-            );
-            if ui.small_button("Dùng prompt review mẫu").clicked() {
-                self.project.rules.prompt = DEFAULT_REACTION_PROMPT.into();
+            script_prompt_input(ui,"setup_prompt_text",&mut self.project.rules.prompt,!self.busy);
+            if ui.small_button("Dùng prompt True Crime / Bodycam").clicked() {
+                crate::us_editorial::apply(&mut self.project.rules);
             }
+            crate::us_editorial::profile_ui(ui,&mut self.project.rules);
+            crate::us_editorial::quality_ui(ui,&self.project);
+            muted(ui,"Tự căn theo Độ dài, ngôn ngữ và Hook / cảnh gốc xen kẽ đã chọn.");
             prompt_duration_hint(ui, &self.project.rules);
             });
             settings_group(ui, "script_hook", "Hook & cảnh gốc xen kẽ", false, |ui| hook_settings(ui, &mut self.project.rules));

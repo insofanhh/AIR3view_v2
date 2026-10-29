@@ -286,6 +286,19 @@ impl StudioApp {
             ui.spacing_mut().item_spacing.x=5.;
             ui.spacing_mut().slider_width=if compact{60.}else{90.};
             ui.style_mut().wrap_mode=Some(egui::TextWrapMode::Extend);
+            let _sfx=ui.menu_button("SFX",|ui| {
+                ui.style_mut().wrap_mode=Some(egui::TextWrapMode::Wrap);
+                ui.set_width(270.);
+                self.card_sound_settings_ui(ui);
+                ui.separator();
+                self.evidence_sound_settings_ui(ui);
+            });
+            if self.capture_path.is_some() && self.frames==3 && std::env::args().any(|a|a=="--capture-menu=sfx") {
+                let mut state=egui::menu::BarState::load(ui.ctx(),ui.id());
+                **state=Some(egui::menu::MenuRoot::new(_sfx.response.rect.left_bottom(),_sfx.response.id));
+                state.store(ui.ctx(),ui.id());
+            }
+            #[cfg(test)] self.hitboxes.insert("tl_sfx".into(),_sfx.response.rect);
             let undo = ui
                 .add_enabled(
                     !self.busy && !self.timeline_view.history.past.is_empty(),
@@ -409,14 +422,6 @@ impl StudioApp {
                 .color(TEAL)
                 .size(11.),
             );
-            let _sfx=ui.menu_button("SFX",|ui| {
-                ui.style_mut().wrap_mode=Some(egui::TextWrapMode::Wrap);
-                ui.set_width(270.);
-                self.card_sound_settings_ui(ui);
-                ui.separator();
-                self.evidence_sound_settings_ui(ui);
-            });
-            #[cfg(test)] self.hitboxes.insert("tl_sfx".into(),_sfx.response.rect);
             let snap = ui.add_enabled(
                 !self.busy,
                 egui::Checkbox::new(&mut self.project.timeline.snapping, "Snap"),
@@ -706,7 +711,8 @@ impl StudioApp {
                                             }
                                         }
                                         BACKGROUND => "Nền".into(),
-                                        EVIDENCE | ANNOTATION | SFX => seg.evidence_items.iter().find(|e|Some(&e.id)==layer.evidence_id.as_ref()).map(|e|if track==SFX{format!("SFX · {}",e.label)}else{e.label.clone()}).unwrap_or_else(||"Dẫn chứng".into()),
+                                        EVIDENCE | ANNOTATION => seg.evidence_items.iter().find(|e|Some(&e.id)==layer.evidence_id.as_ref()).map(|e|e.label.clone()).unwrap_or_else(||"Dẫn chứng".into()),
+                                        SFX => format!("{} · {}",if layer.evidence_id.is_some(){"Ảnh"}else{"Thẻ"},layer.media.as_deref().and_then(crate::evidence_sfx::managed_style).map(crate::evidence_sfx::style_label).unwrap_or("Âm riêng")),
                                         _ => seg
                                             .graphics
                                             .iter()

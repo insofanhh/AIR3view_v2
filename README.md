@@ -1,8 +1,31 @@
 # AIR3view
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.11. Preview, timeline và các layer nằm ngay trong app.
+## Tài nguyên dự án và phục hồi nền
+
+- Đổi nền dẫn chứng hoặc khung hình: preview tự tạo nền mới ở luồng nền. Xuất MP4 tự dựng lại cache nền bị thiếu, giữ kịch bản, giọng, avatar và thông số layer đã chỉnh. Không cần chạy lại AI để sửa riêng nền.
+- Thiết lập giọng/ảnh đang dùng được lưu vào kho chung khi ghi nhớ thiết lập hoặc tạo phiên hàng loạt; mỗi dự án hàng loạt vẫn có bản sao đầu vào riêng. Xóa dự án ban đầu không làm mất tài nguyên đã pin.
+- Đường dẫn giọng cũ chỉ được phục hồi khi tìm thấy bản có đúng nội dung/hash. Nếu không tìm thấy, chọn lại file trong **Giọng & nhân vật**. Tool kiểm tra trước khi tạo dự án con và dọn phần tạo dở khi tạo phiên thất bại.
+- Xóa dự án bị chặn nếu dự án khác hoặc thiết lập cũ vẫn dùng giọng/ảnh trong thư mục đó. Lưu lại thiết lập để pin vào kho chung, hoặc chuyển tài nguyên của dự án phụ thuộc trước khi xóa.
+
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.12. Preview, timeline và các layer nằm ngay trong app.
+
+## Âm thanh thẻ và ảnh dẫn chứng
+
+Mở **Biên tập → SFX** ở đầu thanh timeline. **Thẻ thông tin / số liệu** và **Ảnh dẫn chứng** có lựa chọn âm, bật/tắt và âm lượng riêng. Bật **Đồng bộ loại SFX cho cả hai nhóm** nếu muốn dùng cùng loại âm; âm lượng vẫn chỉnh riêng.
+
+- **Paper tear (Whoosh)**, **Appear (Ting)** và **Pop** dùng bộ âm thanh mới đã cắt khoảng lặng. **Nghe** phát mẫu trước khi chọn; **Áp dụng lại cho nhóm** cập nhật các SFX của nhóm hiện tại, bỏ qua layer/nhóm bị khóa và file âm thanh riêng đã nhập.
+- Đổi SFX trong preview layer cập nhật phần âm thanh, giữ vị trí phát và giọng đọc. Clip sao chép giữ thông tin loại thẻ để chế độ Tự động chọn đúng âm. Timing đã chỉnh tay được giữ trong giới hạn file mới.
+- Dự án cũ tự nhận bản âm thanh mới của thư viện. MP4 đã xuất cần xuất lại; thay đổi riêng SFX dùng lại cache hình, không tạo lại kịch bản, giọng hoặc avatar.
 
 ## Xuất / nhập thiết lập giữa các máy
+
+### Prompt True Crime / Bodycam
+
+Trong **Thiết lập dự án → Kịch bản → Prompt & phong cách**, chọn **Dùng prompt True Crime / Bodycam** để áp dụng mẫu mới cho dự án đang mở. Dự án mới dùng mẫu này theo mặc định; chỉ preset mặc định cũ được tự chuyển, prompt tự viết được giữ lại. Chọn **English** ở Ngôn ngữ lời review nếu muốn lời, sub và thẻ thông tin bằng tiếng Anh.
+
+Mẫu dùng năm nhịp nội dung co giãn theo Độ dài, tôn trọng bật/tắt hook, số đoạn tiếng gốc và khoảng thời gian đã chọn; không cố định video vào mốc 70 giây. Ngân sách lời được tính từ thời lượng trừ clip gốc và kiểm tra trước TTS; WAV thật vẫn quyết định thời lượng cuối. Chỉ dẫn sân khấu phải tách khỏi narration. Khi nguồn không nêu bản án, kịch bản phải nói rõ chưa có kết quả. Đổi prompt không tự viết lại những cảnh đã có.
+
+### Gói thiết lập
 
 Trong **Biên tập video**, mở nút **Thiết lập** trên thanh công cụ:
 
@@ -62,6 +85,17 @@ Các mục **01 / Kịch bản**, **03 / Giọng, nhân vật & âm thanh**, **0
 - **Chọn layer → Màu & lật riêng layer → Ghi đè thiết lập dự án** để chỉnh từng layer. Bỏ ghi đè sẽ dùng lại thông số chung. Tick đồng bộ của track áp dụng các thay đổi màu/lật cho layer cùng loại có thể sửa; tôn trọng khóa layer/cảnh/nhóm. Tách/nhân bản giữ thiết lập màu riêng. Thông số màu/lật chung được nhớ cho các dự án sau; ghi đè theo ID thuộc dự án hiện tại.
 - **05 / Video nguồn → Chuẩn hóa video đầu vào:** Tự động, Giữ nguyên, Đóng gói lại (remux) hoặc Chuyển mã H.264/AAC; tùy chọn tạo proxy nhẹ. Áp dụng khi tải/nhập nguồn hoặc bấm **Áp dụng cho nguồn hiện có**. Tự động kiểm tra khả năng giải mã, mốc bắt đầu và tín hiệu HDR; HDR được tone map về SDR BT.709. File gốc được giữ nguyên, bản chuẩn hóa/proxy nằm trong cache dự án; báo cáo tại `cache/normalized`. Remux giữ codec nên không thay thế chuyển mã khi codec/container không tương thích.
 - Đổi nhạc/âm lượng không tạo lại AI, voice hoặc avatar. Đổi nhạc chỉ dựng lại phần audio, giữ cache hình đã xuất nếu hình ảnh không đổi. Màu/lật làm mất hiệu lực các đoạn hình bị tác động. Dự án cũ mặc định tắt nhạc/LUT/lật, các chỉ số track cũ được giữ nguyên.
+
+## Đối chiếu và chọn lại ảnh dẫn chứng
+
+Trong **Biên tập → Dẫn chứng**, bấm **Kiểm tra / chọn lại ảnh dẫn chứng** để sửa ảnh của dự án cũ. Tool tìm các khung hình từ đúng nguồn, kiểm tra ảnh sau crop và gọi provider hiện có để đối chiếu với lời review. Giọng, avatar và thời lượng cảnh được giữ nguyên; cảnh/track/layer khóa và lựa chọn thủ công được tôn trọng. Có bản sao dự án trước khi xử lý tại `analysis/evidence-backups`.
+
+- Mỗi thẻ có trạng thái và lý do chọn/loại. Mở **Ảnh ứng viên / chọn lại** để chọn ảnh khác hoặc kiểm tra riêng bằng AI. **Xem nguồn** hiển thị toàn cảnh cạnh phần crop thực tế, đã tính crop% của dự án.
+- Không có ảnh phù hợp: ẩn thẻ và báo **Cần kiểm tra dẫn chứng**. Thẻ fact/stat chỉ dùng chữ khi trích dẫn khớp transcript và dữ kiện được đối chiếu. Người dùng có thể **Giữ lựa chọn này**; trạng thái thủ công không đồng nghĩa dữ kiện đã được xác minh.
+- Ảnh đã đối chiếu được dùng lại khi nội dung/nguồn/crop không đổi. Bước kiểm tra ảnh cần Antigravity CLI hoặc Gemini API đang hoạt động; lỗi kết nối/quyền không tạo kết quả giả. Báo cáo nằm tại `analysis/evidence-selection-report.json`.
+- CLI: `studio-cli.exe evidence <project.json>`; thêm `--recheck` để yêu cầu kiểm tra lại.
+- Khi bật dẫn chứng, mỗi cảnh Host phải có ít nhất một ảnh nguồn đã đối chiếu và layer hiển thị trên timeline trước khi tác vụ tự động báo hoàn tất. Nếu AI sửa kịch bản làm mất ảnh, tool bổ sung một ảnh minh họa đúng nguồn và kiểm tra độ liên quan; không tự bịa số liệu hoặc biến thẻ chữ thành ảnh. Ảnh chưa đạt sẽ báo rõ cảnh cần xử lý, giữ checkpoint giọng/avatar. Báo cáo: `analysis/host-evidence-report.json`.
+- Nút kiểm tra ảnh cũng bổ sung ảnh thiếu cho dự án cũ, giữ nguyên lời đọc/thời lượng/giọng/nhân vật. Track/cảnh/layer đã khóa hoặc ẩn cần mở lại nếu muốn hiển thị ảnh. Khi dẫn chứng bị tắt trong thiết lập, điều kiện ảnh Host không áp dụng. Trích dẫn được đối chiếu xuyên các đoạn ASR liền kề trong cửa sổ thời gian có giới hạn; không ghép câu từ nguồn hay thời điểm xa nhau.
 
 ## Tăng tốc footage và hook, giữ voice AI 1×
 
@@ -156,6 +190,8 @@ Hàng đợi chỉ sao chép tài nguyên đang dùng: giọng tham chiếu khi 
 
 App xử lý lần lượt một dự án để giới hạn RAM/VRAM. **Tạm dừng sau video hiện tại** chờ video đang chạy xong; **Dừng tác vụ hiện tại** hủy bước hiện tại và tạm dừng đợt. Dùng **Bắt đầu / tiếp tục** để tiếp tục checkpoint; **Thử lại** cho các mục lỗi. Lỗi riêng một URL không chặn URL sau; lỗi cấu hình, xác thực hoặc tài nguyên chung sẽ tạm dừng để xử lý. Lỗi mạng tạm thời được thử lại tối đa một lần sau 30 giây.
 
+**Tự phục hồi thiếu thời lượng:** quy trình tự động và dự án con hàng loạt thử lại từ checkpoint tối đa **3 lần sau lượt đầu** khi timeline sau giọng/khớp footage ngắn hơn Độ dài đã đặt. Bộ đếm nằm ở `duration-recovery.json`, giữ qua lần mở app; không đổi min/max. Thiếu tối đa 2 giây: ưu tiên bổ sung footage thật ở cảnh gốc chưa khóa, còn nguồn, không chạm vùng loại và không vượt giới hạn cảnh xen kẽ. Thiếu trên 2 giây hoặc không có footage hợp lệ: sửa lượng lời theo tốc độ TTS đo được, tối đa 2 lượt AI dùng chung trong chu kỳ. Cảnh không đổi dùng lại WAV; lời sửa tạo lại giọng và căn lại hình/sub/dẫn chứng. Không đổi tốc độ voice. Thông báo dùng ba chữ số thập phân và số ms thiếu/thừa. Hết ngân sách thì dừng, giữ dữ liệu; bấm **Thử lại** thủ công sau lỗi bắt đầu chu kỳ mới có giới hạn và lưu lịch sử chu kỳ trước. Tiếp tục sau gián đoạn giữ bộ đếm. Lỗi mạng, file, xác thực, thao tác hủy và xuất lại timeline thủ công không bị gán thành lỗi thiếu thời lượng.
+
 **Bỏ khỏi hàng đợi** chỉ bỏ lượt chạy, giữ dữ liệu dự án. Có thể đổi thứ tự các mục đang chờ và mở dự án đã hoàn thành trong khi đợt tiếp tục. Tác vụ nặng thủ công và cài bản cập nhật bị khóa khi hàng đợi chạy. Đóng app sẽ dừng hàng đợi do phiên đó khởi chạy; mở lại và bấm tiếp tục. Không tự xuất lại các mục đã hoàn thành. Khi thử lại bước xuất, MP4 có biên nhận hợp lệ được kiểm tra rồi dùng lại.
 
 **Xuất sau khi đã có timeline:** mỗi dòng trong **Xử lý hàng loạt** có nút **Xuất** (hoặc **Xuất lại**). Nút **Xuất MP4 cả phiên** ở góc phải xuất lần lượt các dự án hợp lệ trong phiên đang chọn. Trước khi xếp hàng, app kiểm tra `project.json`, timeline và media được dùng; nếu thiếu dữ liệu, hiển thị lý do và cho xác nhận bỏ qua các mục đó. Nếu không có dự án hợp lệ thì không chạy worker. Thao tác dùng timeline/giọng/avatar đã lưu, không chạy lại phân tích hay tạo giọng. Lần đầu chọn thư mục lưu, các lần sau dùng nơi đã nhớ; mỗi dự án lưu tại `AIR3view-<ID>/final.mp4`. Nếu MP4 đích đã tồn tại, app yêu cầu **Xác nhận xuất lại**; **Hủy** giữ nguyên file và hàng đợi. Xuất lại tạo MP4 mới từ timeline hiện tại và giữ bản cũ tại `final.previous-….mp4` sau khi bản mới vượt kiểm tra hình/tiếng/thời lượng. Có thể tạm dừng/tiếp tục và thử lại nếu xuất lỗi. CLI `batch-export <batch-id> <output-folder> [item-id]` yêu cầu thêm `--overwrite` khi đã có MP4 đích.
@@ -206,6 +242,21 @@ Khi clone source: chạy `scripts/setup-tools.ps1` để tải đúng phiên b�
 `scripts/clean-workspace.ps1` mặc định chỉ xem danh sách dung lượng; thêm `-Apply` để xóa video/file kiểm thử còn lại và Python bytecode. Thêm `-IncludeLegacyPackage` để xóa bản đóng gói cũ `dist/ReactionStudio` sau khi đóng app cũ. Môi trường `.venv`, công cụ tải về và dữ liệu AppData được giữ lại. Dọn cache Rust riêng bằng `cargo clean` (lần build sau sẽ biên dịch lại).
 
 ## CLI
+
+### Preset US Bodycam / True Crime
+
+Trong **Biên tập video → Thiết lập dự án → Kịch bản → Prompt & phong cách**, bấm **Dùng prompt True Crime / Bodycam** để chọn English, bộ kiểm tra US v1 và chế độ xen tiếng gốc tự căn nhịp. Có thể đổi lại ngôn ngữ hoặc chọn số đoạn cố định; thời lượng luôn lấy từ Độ dài. Nút preset không tự viết lại timeline đang có.
+
+- Ba rule lời đọc dùng chung cho prompt, sửa cục bộ và đối chiếu: kể trực tiếp sự kiện, setup tiến tới hành động mới sau hook, tránh lặp thừa nhưng cho phép ngữ pháp tự nhiên/trích dẫn/tên tội danh. Tự rà trong cùng phản hồi; lặp nhỏ chỉ là lưu ý local, không thêm lượt AI bắt buộc hay thay đổi cấu hình xuất MP4. Thời gian tổng vẫn phụ thuộc nhà cung cấp và số lỗi dữ kiện thực tế.
+- Năm nhịp nội dung co giãn theo thời lượng. Câu lời bình ngắn, số trong TTS viết bằng chữ; card tối đa 25 ký tự mỗi dòng, giữ nguyên nghĩa và nguồn trích dẫn.
+- Đối chiếu độc lập hook, địa điểm, chi tiết và trạng thái pháp lý với transcript/ảnh nguồn. Không có bản án thì chỉ nêu hành động pháp lý gần nhất đã xác minh; phần chưa rõ nằm trong evidence nội bộ. Không chèn lời đọc kiểu “video không cung cấp”, không suy đoán đang bị giam/chờ xét xử từ việc bị bắt. Cảnh nạn nhân/tổn thương dùng biểu cảm nghiêm túc, không cử chỉ vui vẻ.
+- Kiểm tra riêng từng clip gốc bằng frame đúng mốc và transcript lân cận; không lấy câu nói trước/sau đoạn cắt làm bằng chứng cho đoạn đó. Khi sửa sai khoảnh khắc, giữ nguyên độ dài/số clip và các cảnh khóa. Tiêu đề pháp lý như “upheld” cần bằng chứng trực tiếp về phúc thẩm.
+- Chế độ tự căn nhịp tính số clip từ Độ dài và kiểm tra khối lời bình sau WAV thật. Chế độ cố định giữ số đoạn người dùng chọn. Các clip source giữ tiếng gốc; voice AI không tăng tốc.
+- Tối đa hai lượt sửa biên tập cho một lần tạo kịch bản, chia sẻ giữa phân tích URL và kiểm tra sau tải. Phục hồi thời lượng WAV vẫn có ngân sách riêng hiện hữu. Cảnh khóa không tự sửa. Không đủ bằng chứng hoặc sửa chưa đạt thì báo lỗi, giữ checkpoint.
+- Sửa cục bộ chỉ trả trường thay đổi; giữ dữ kiện đã duyệt và WAV không đổi. Ngân sách từng khối dựa trên giọng thật, có gợi ý phân phối lại lời để giữ tổng Độ dài. Timeout, quota, JSON chưa hoàn tất hoặc công cụ bị từ chối có thông báo riêng; không tự cấp quyền shell. Candidate được lưu trước khi gọi đối chiếu để có thể tiếp tục sau timeout.
+- Mở **Kiểm tra kịch bản US** để xem lỗi theo cảnh và lưu ý; bấm **Đọc lại kết quả** để làm mới. Chi tiết: `analysis/validation-report.json`, `analysis/us-editorial-report.json`, `analysis/us-editorial/*/review.json`. Đây là kiểm tra bằng AI trên bằng chứng đã lấy mẫu, không thay thế đối chiếu thủ công toàn bộ sự kiện.
+- Đối chiếu clip gốc và trace CLI: `analysis/us-raw-audit/*/review.json`, `provider.cli.jsonl` trong từng thư mục phân tích/sửa. Chỉ các đối chiếu đã hoàn tất mới được dùng lại từ cache.
+- Preset được lưu trong mẫu dự án, phiên hàng loạt và `.air3preset`. Dự án cũ và prompt tự viết không tự bật bộ kiểm tra; người dùng chọn bật khi cần.
 
 ```text
 studio-cli doctor

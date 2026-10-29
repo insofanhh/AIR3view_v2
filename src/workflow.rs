@@ -71,7 +71,7 @@ fn stage_keys(p:&Project,s:&Settings)->StageKeys {
     let prepare=media::hash(serde_json::to_vec(&(crate::script_quality::VERSION,sources,&p.input_urls,&p.rules,&p.evidence_settings,
         (&s.provider,&s.cli_path,&s.cli_args,&s.cli_model,&s.analysis_input,&s.gemini_base,&s.gemini_model,
         s.visual_sample_seconds,&s.asr_model,&s.asr_language))).unwrap());
-    let assets=media::hash(serde_json::to_vec(&("assets-final-evidence-v1",&prepare,&s.vieneu_url,&s.voice,s.voice_reference_enabled,s.voice_reference_denoise,
+    let assets=media::hash(serde_json::to_vec(&("assets-duration-recovery-v2",&prepare,&s.vieneu_url,&s.voice,s.voice_reference_enabled,s.voice_reference_denoise,
         crate::input_assets::file_fingerprint(&s.voice_reference_path),s.avatar_enabled,&s.avatar_provider,&s.cartoon_character,
         &s.heygen_base,&s.avatar_id,&s.avatar_image_url,crate::input_assets::file_fingerprint(&s.avatar_image_path))).unwrap());
     let align=p.production.as_ref().is_none_or(|v|v.align_subtitles);
@@ -282,6 +282,7 @@ fn run_stages(
     mut perform: impl FnMut(Phase, Project, &Settings, &Sender<Event>, &Cancel) -> Result<Project>,
 ) -> Result<Project> {
     let _lease=JobLease::acquire(&p.root)?;
+    if !resume { crate::duration_recovery::Recovery::reset(&p, &s)?; }
     let key = fingerprint(&p, &s);
     let keys=stage_keys(&p,&s);
     let mut job = if resume {
@@ -289,11 +290,15 @@ fn run_stages(
             .context("Chưa có tác vụ để tiếp tục. Bấm Tạo review tự động.")?;
         ensure!(job.project_id==p.id,"Checkpoint không thuộc dự án này");
         let mut job=job;
+        // Legacy completed projects may have lost every photo during script
+        // repair. Resume their assets, without regenerating the script/voice.
+        let coverage_phase=if crate::host_evidence::validate(&p,true).is_err(){Phase::Assets}else{Phase::Ready};
         if job.stage_keys.prepare.is_empty() {
             ensure!(job.fingerprint==key,"Thiết lập hoặc nguồn đã thay đổi; bấm Tạo review tự động để chạy theo cấu hình mới.");
-            ensure!(job.can_resume(), "Tác vụ đã hoàn tất.");
+            ensure!(job.can_resume() || coverage_phase!=Phase::Ready, "Tác vụ đã hoàn tất.");
+            job.phase=job.phase.min(coverage_phase);
         }else{
-            let changed=job.stage_keys.changed_phase(&keys);
+            let changed=job.stage_keys.changed_phase(&keys).min(coverage_phase);
             ensure!(job.can_resume() || changed!=Phase::Ready,"Tác vụ đã hoàn tất.");
             job.phase=job.phase.min(changed);
         }
@@ -325,8 +330,30 @@ fn run_stages(
             let phase = job.phase;
             job.message = phase.label().into();
             job.publish(&root, &tx)?;
-            p = perform(phase, p, &s, &tx, &cancel)
-                .with_context(|| format!("Quy trình tự động / {}", phase.label()))?;
+            let previous = p.clone();
+            let outcome = perform(phase, p, &s, &tx, &cancel).and_then(|updated| {
+                if phase == Phase::Assets { updated.save()?; updated.check_duration()?; }
+                Ok(updated)
+            });
+            p = match outcome {
+                Ok(updated) => updated,
+                Err(error) => {
+                    if phase == Phase::Assets && !cancel.load(Ordering::Relaxed) {
+                        if let Some(mismatch) = error.downcast_ref::<crate::duration_recovery::Mismatch>().filter(|m|m.shortfall()>0) {
+                            let saved = Project::load(&root.join("project.json")).unwrap_or(previous);
+                            if let Some(attempt) = crate::duration_recovery::Recovery::retry(&saved, &s, mismatch, &cancel)? {
+                                job.message = format!("Thiếu {:.3}s; đang thử lại tự động {attempt}/3 từ giọng đã lưu", mismatch.shortfall() as f64 / 1000.);
+                                job.publish(&root, &tx)?;
+                                let _ = tx.send(Event::Stage { lane:"Phục hồi thời lượng".into(), message:job.message.clone(), done:false });
+                                p = saved;
+                                continue;
+                            }
+                            return Err(error.context("Chưa đạt thời lượng sau tối đa 3 lần thử lại tự động; giọng và checkpoint được giữ nguyên"));
+                        }
+                    }
+                    return Err(error.context(format!("Quy trình tự động / {}", phase.label())));
+                }
+            };
             process::check_cancel(&cancel)?;
             if phase == Phase::Prepare {
                 p.validate(true)?;
@@ -348,15 +375,22 @@ fn run_stages(
             };
             job.publish(&root, &tx)?;
         }
-        if let Err(error)=crate::evidence::validate_prepared(&p) {
+        if let Err(error)=crate::evidence::validate_prepared(&p).and_then(|_|crate::host_evidence::validate(&p,true)) {
             job.phase=Phase::Assets;
             return Err(error.context("Dẫn chứng chưa sẵn sàng; tiếp tục để cập nhật ảnh theo kịch bản cuối"));
         }
         p.status = "Sẵn sàng biên tập / xuất MP4".into();
+        p.check_duration()?;
+        crate::duration_recovery::Recovery::complete(&p, &s)?;
         p.save()?;
         job.status = Status::Complete;
         job.message = if p.script_warnings.is_empty(){"Kịch bản, giọng và nhân vật đã sẵn sàng".into()}
-            else{format!("Sẵn sàng với {} cảnh báo dẫn chứng; xem chi tiết bên dưới",p.script_warnings.len())};
+            else{format!("Sẵn sàng với {} cảnh báo; xem chi tiết bên dưới",p.script_warnings.len())};
+        let recovery=crate::duration_recovery::Recovery::load(&p,&s)?;
+        if recovery.auto_attempts>0 || recovery.ai_attempts>0 {
+            job.message=format!("Đã phục hồi thời lượng {:.3}s, đạt {}–{}s; {} lần thử lại, {} lượt sửa lời. {}",
+                p.composition_duration() as f64/1000.,p.rules.min_seconds,p.rules.max_seconds,recovery.auto_attempts,recovery.ai_attempts,job.message);
+        }
         job.publish(&root, &tx)?;
         Ok(p)
     })();
@@ -378,6 +412,87 @@ fn run_stages(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_complete_project_with_empty_host_resumes_assets_and_cannot_falsely_finish() {
+        let temp=tempfile::tempdir().unwrap();let mut p=plan(project(temp.path()));p.segments[0].kind="host".into();p.save().unwrap();
+        let s=Settings::default();let (tx,_)=std::sync::mpsc::channel();
+        JobState{id:"legacy".into(),project_id:p.id.clone(),fingerprint:fingerprint(&p,&s),stage_keys:stage_keys(&p,&s),
+            phase:Phase::Ready,status:Status::Complete,message:String::new()}.publish(temp.path(),&tx).unwrap();
+        let mut phases=vec![];
+        let error=run_stages(p,s,tx,process::cancel_token(),true,|phase,p,_,_,_|{phases.push(phase);Ok(p)}).unwrap_err();
+        assert_eq!(phases,vec![Phase::Assets,Phase::Captions]);assert!(format!("{error:#}").contains("chưa có ảnh dẫn chứng"));
+        let job=JobState::load(temp.path()).unwrap();assert_eq!(job.status,Status::Failed);assert_eq!(job.phase,Phase::Assets);
+    }
+    #[test]
+    fn near_boundary_real_audio_recovers_and_exports_with_unchanged_voice_and_rules() {
+        use std::time::Duration;
+        let temp=tempfile::tempdir().unwrap();let s=Settings{avatar_enabled:false,..Default::default()};
+        let cancel=process::cancel_token();let source=temp.path().join("source.mp4");
+        process::run(&s.ffmpeg,&process::args(&["-y","-v","error","-f","lavfi","-i","color=c=navy:s=320x180:r=24:d=110",
+            "-f","lavfi","-i","anullsrc=r=48000:cl=mono","-t","110","-c:v","libx264","-preset","ultrafast","-c:a","aac","-shortest",&source.to_string_lossy()]),None,&cancel,Duration::from_secs(45),None).unwrap();
+        let mut p=Project{root:temp.path().into(),sources:vec![media::probe(&s,&source,&cancel).unwrap()],..Default::default()};
+        p.sources[0].id="src".into();p.rules.min_seconds=95;p.rules.max_seconds=240;p.rules.hook_enabled=false;p.rules.intercuts_enabled=false;
+        p.evidence_settings.enabled=false;p.subtitles.enabled=false;p.output.resolution=360;p.output.portrait=false;p.output.fps=24;
+        let voice_text="Measured voice test";
+        let body=crate::providers::tts_payload(&s,voice_text).unwrap();
+        let key=media::hash(format!("vieneu-v3-turbo-reference-v1:{}:{}",s.vieneu_url,body));
+        let folder=p.root.join("cache/audio");fs::create_dir_all(&folder).unwrap();let wav=folder.join(format!("{key}.wav"));
+        process::run(&s.ffmpeg,&process::args(&["-y","-v","error","-f","lavfi","-i","sine=frequency=400:sample_rate=48000:duration=1.98","-c:a","pcm_s16le",&wav.to_string_lossy()]),None,&cancel,Duration::from_secs(15),None).unwrap();
+        let wave_before=fs::read(&wav).unwrap();
+        p.segments=vec![Segment{kind:"review".into(),source_id:"src".into(),out_ms:2000,duration_ms:2000,narration:voice_text.into(),..Default::default()},
+            Segment{source_id:"src".into(),in_ms:10000,out_ms:103000,duration_ms:93000,..Default::default()}];
+        let rules=serde_json::to_vec(&p.rules).unwrap();let (tx,_)=std::sync::mpsc::channel();let mut calls=0;
+        let done=run_stages(p,s.clone(),tx,cancel.clone(),false,|phase,p,s,tx,cancel|{
+            if phase==Phase::Assets {calls+=1;pipeline::generate_assets(p,s.clone(),tx.clone(),cancel.clone())}else{Ok(p)}
+        }).unwrap();
+        assert_eq!(calls,2);assert_eq!(fs::read(wav).unwrap(),wave_before);
+        assert_eq!(serde_json::to_vec(&done.rules).unwrap(),rules);
+        let state=crate::duration_recovery::Recovery::load(&done,&s).unwrap();assert_eq!(state.auto_attempts,1);assert_eq!(state.ai_attempts,0);
+        let output=temp.path().join("final.mp4");media::render(&done,&s,&output,&cancel,|_,_|{}).unwrap();
+        let probe=media::probe(&s,&output,&cancel).unwrap();assert!(probe.has_audio);assert!((95000..=240000).contains(&probe.duration_ms));
+        assert!(probe.duration_ms.abs_diff(done.composition_duration())<=100);
+    }
+    #[test]
+    fn measured_shortfall_retries_three_times_reuses_checkpoint_and_stops_at_success() {
+        let temp=tempfile::tempdir().unwrap();let mut p=plan(project(temp.path()));
+        p.rules.min_seconds=3;p.save().unwrap();let rules=serde_json::to_vec(&p.rules).unwrap();
+        let (tx,_)=std::sync::mpsc::channel();let mut assets=0;
+        let done=run_stages(p,Settings::default(),tx,process::cancel_token(),false,|phase,mut p,_,_,_| {
+            if phase==Phase::Assets {
+                assets+=1;
+                p.segments[0].duration_ms=if assets<=3 {2990}else{3000};
+                p.save()?;p.check_duration()?;
+            }
+            Ok(p)
+        }).unwrap();
+        assert_eq!(assets,4);assert_eq!(serde_json::to_vec(&done.rules).unwrap(),rules);
+        let state=crate::duration_recovery::Recovery::load(&done,&Settings::default()).unwrap();
+        assert_eq!(state.auto_attempts,3);assert_eq!(state.status,"complete");
+    }
+    #[test]
+    fn exhausted_duration_recovery_persists_and_other_failures_do_not_retry() {
+        let temp=tempfile::tempdir().unwrap();let mut p=plan(project(temp.path()));p.rules.min_seconds=3;p.save().unwrap();
+        let (tx,_)=std::sync::mpsc::channel();let mut calls=0;
+        assert!(run_stages(p,Settings::default(),tx.clone(),process::cancel_token(),false,|phase,mut p,_,_,_| {
+            if phase==Phase::Assets {calls+=1;p.segments[0].duration_ms=2990;p.save()?;p.check_duration()?;}Ok(p)
+        }).unwrap_err().to_string().contains("3 lần thử lại"));
+        assert_eq!(calls,4);
+        let p=Project::load(&temp.path().join("project.json")).unwrap();calls=0;
+        assert!(run_stages(p,Settings::default(),tx,process::cancel_token(),true,|_,p,_,_,_|{calls+=1;p.check_duration()?;Ok(p)}).is_err());
+        assert_eq!(calls,1);
+        for kind in ["network","long","cancel"] {
+            let temp=tempfile::tempdir().unwrap();let mut p=plan(project(temp.path()));p.rules.min_seconds=3;p.save().unwrap();
+            let (tx,_)=std::sync::mpsc::channel();let cancel=process::cancel_token();let mut calls=0;
+            let result=run_stages(p,Settings::default(),tx,cancel.clone(),false,|phase,mut p,_,_,_|{
+                if phase==Phase::Assets {calls+=1;
+                    match kind {"long"=>{p.segments[0].duration_ms=25000;p.check_duration()?;},
+                        "cancel"=>{cancel.store(true,Ordering::Relaxed);anyhow::bail!("Cancelled");},
+                        _=>anyhow::bail!("HTTP 401")}
+                }Ok(p)
+            });
+            assert!(result.is_err());assert_eq!(calls,1,"{kind}");
+        }
+    }
     fn project(root: &Path) -> Project {
         fs::write(root.join("source.mp4"), b"test placeholder").unwrap();
         let mut p = Project {

@@ -87,6 +87,12 @@ impl StudioApp {
             let key=if c.motion.blurred(ms.saturating_sub(c.start_ms)+c.cue_in_ms){format!("{}#blur",c.id)}else{c.id.clone()};
             if let Some(texture)=self.layers.textures.get(&key).or_else(||self.layers.textures.get(&c.id)) {image_layer(&painter,texture,&t,canvas);}
         }
+        if self.player.preparing_backgrounds>0 {
+            let pos=outer.left_top()+Vec2::splat(8.);
+            let text=painter.layout(format!("Đang cập nhật nền · {} cảnh Host…",self.player.preparing_backgrounds),egui::FontId::proportional(12.),Color32::WHITE,(outer.width()-16.).max(40.));
+            painter.rect_filled(Rect::from_min_size(pos-Vec2::splat(4.),text.size()+Vec2::splat(8.)),4.,BG);
+            painter.galley(pos,text,Color32::WHITE);
+        }
         let selected=self.layers.selected.clone();
         let mut mode=0;
         if let Some(c)=clips.iter().find(|c|Some(&c.id)==selected.as_ref()&&!c.audio()) {

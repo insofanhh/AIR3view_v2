@@ -39,7 +39,7 @@ pub fn prepared_path(p:&Project)->PathBuf {
 }
 pub fn clip(p:&Project)->Option<LayerClip>{
     if !p.music.enabled||end(p)==0{return None;}
-    Some(LayerClip{id:"music-bed".into(),scene_id:p.segments.first()?.id.clone(),track:timeline::MUSIC,start_ms:0,duration_ms:end(p),media_in_ms:0,playback_rate:1.,cue_in_ms:0,media:Some(prepared_path(p)),proxy:None,transform:Transform::default(),z:0,visible:true,locked:false,linked:false,gain:p.music.gain,fade_in_ms:p.music.fade_in_ms,fade_out_ms:p.music.fade_out_ms,evidence_id:None,group:None,motion:Default::default(),timing_manual:false})
+    Some(LayerClip{id:"music-bed".into(),scene_id:p.segments.first()?.id.clone(),track:timeline::MUSIC,start_ms:0,duration_ms:end(p),media_in_ms:0,playback_rate:1.,cue_in_ms:0,media:Some(prepared_path(p)),proxy:None,transform:Transform::default(),z:0,visible:true,locked:false,linked:false,gain:p.music.gain,fade_in_ms:p.music.fade_in_ms,fade_out_ms:p.music.fade_out_ms,evidence_id:None,group:None,motion:Default::default(),timing_manual:false,sound_cue:None})
 }
 pub fn prepare(p:&Project,s:&crate::model::Settings,cancel:&Cancel)->Result<()> {
     if !p.music.enabled{return Ok(());}process::check_cancel(cancel)?;p.music.validate()?;let output=prepared_path(p);if output.is_file(){return Ok(());}
