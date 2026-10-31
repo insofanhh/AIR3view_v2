@@ -87,10 +87,9 @@ pub fn generate(s: &Settings, seg: &Segment, folder: &Path, cancel: &Cancel) -> 
         "portrait-base.png"
     });
     let key = media::hash(format!(
-        "cartoon-rig-v5-halfbody:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        "cartoon-rig-v6-lipsync:{}:{}:{}:{}:{}:{}:{}:{}:{}",
         lips_key,
         s.cartoon_character,
-        seg.emotion,
         seg.duration_ms,
         crate::input_assets::file_fingerprint(&worker.to_string_lossy()),
         crate::input_assets::file_fingerprint(&head_asset.to_string_lossy()),
@@ -106,7 +105,7 @@ pub fn generate(s: &Settings, seg: &Segment, folder: &Path, cancel: &Cancel) -> 
     let job = folder.join(format!("{key}.render.json"));
     write_json(
         &job,
-        &json!({"cues":cues_path,"output":output,"ffmpeg":s.ffmpeg,"duration_ms":seg.duration_ms,"fps":25,"size":512,"emotion":seg.emotion,"character":s.cartoon_character,"gesture":seg.gesture,"narration":seg.narration,"words":seg.words}),
+        &json!({"cues":cues_path,"output":output,"ffmpeg":s.ffmpeg,"duration_ms":seg.duration_ms,"fps":25,"size":512,"character":s.cartoon_character,"gesture":seg.gesture,"narration":seg.narration,"words":seg.words}),
     )?;
     process::run(
         &s.python,

@@ -46,174 +46,39 @@ pub fn apply_plan(p:&mut Project,plan:ScriptPlan)->Result<()> {
     Ok(())
 }
 
-/// The URL analysis branch starts immediately, before media downloads have finished.
+/// Download and checkpoint every source before any AI request. Both providers
+/// then receive the same timestamped local transcript/photo evidence.
 pub fn prepare(mut p: Project, s: Settings, tx: Sender<Event>, cancel: Cancel) -> Result<Project> {
-    // Resolve once before starting paid analysis. Never relocate already downloaded sources.
-    let source_folder = if crate::download_location::needs_download(&p) {
-        crate::download_location::folder(&p, &s)?
-    } else { p.root.join("sources") };
-    if s.provider == "antigravity" && (s.analysis_input=="local" || p.sources.iter().any(|src|src.url.is_empty()) || (s.analysis_input=="auto" && providers::url_known_unavailable(&p,&s))) {
-        p.status = "Tải video trước khi phân tích local".into();
-        p.save()?;
-        for index in 0..p.sources.len() {
-            let source = &p.sources[index];
-            stage(
-                &tx,
-                "Download",
-                &format!("Tải video {}/{}", index + 1, p.sources.len()),
-                false,
-            );
-            let mut local = if source.path.is_file() {
-                source.clone()
-            } else {
-                media::download(
-                    &s,
-                    &source.url,
-                    &source_folder,
-                    source.id.clone(),
-                    &cancel,
-                )?
-            };
-            // Commit each download before doing any later expensive work.
-            p.sources[index] = local.clone();
-            p.save()?;
-            crate::source_normalization::prepare(&p.normalization,&s,&mut local,&p.root,&cancel)?;
-            p.sources[index] = local;
-            p.save()?;
-            let _ = tx.send(Event::Project(Box::new(p.clone())));
-        }
-        stage(&tx, "Download", "Đã tải nguồn", true);
-        stage(
-            &tx,
-            "Analysis",
-            "Tạo transcript Whisper và ảnh có timestamp",
-            false,
-        );
-        crate::analysis::prepare(&p, &s, &cancel, |message| {
-            stage(&tx, "Analysis", message, false)
-        })?;
-        stage(
-            &tx,
-            "Analysis",
-            "Antigravity đang đọc transcript + ảnh và viết script JSON",
-            false,
-        );
-        let plan = providers::analyze_progress(&p, &s, &cancel,true,&tx)?;
-        apply_plan(&mut p,plan)?;
-        p.validate(true)?;
-        p.check_duration()?;
-        p.status = "Chờ duyệt kịch bản".into();
-        p.save()?;
-        stage(
-            &tx,
-            "Analysis",
-            "Đã nhận kịch bản JSON từ dữ liệu local",
-            true,
-        );
-        return Ok(p);
-    }
-    p.status = "Phân tích và tải song song".into();
-    p.save()?;
-    let analysis_p = p.clone();
-    let analysis_s = s.clone();
-    let analysis_tx = tx.clone();
-    let analysis_cancel = cancel.clone();
-    let downloads = p.sources.clone();
-    let downloads_s = s.clone();
-    let downloads_tx = tx.clone();
-    let downloads_cancel = cancel.clone();
-    let root = p.root.clone();
-    let normalization=p.normalization.clone();
-    let (mut analysis, download) = thread::scope(|scope| {
-        let analysis = scope.spawn(move || {
-            stage(
-                &analysis_tx,
-                "Gemini",
-                "Đang đọc URL và viết kịch bản",
-                false,
-            );
-            let result = providers::analyze_progress(&analysis_p, &analysis_s, &analysis_cancel,analysis_s.analysis_input=="local",&analysis_tx);
-            stage(
-                &analysis_tx,
-                "Gemini",
-                if result.is_ok() {
-                    "Đã nhận kịch bản JSON"
-                } else {
-                    "Phân tích thất bại"
-                },
-                true,
-            );
-            result
-        });
-        let download = scope.spawn(move || -> Result<Vec<Source>> {
-            let mut sources = vec![];
-            for (i, src) in downloads.iter().enumerate() {
-                stage(
-                    &downloads_tx,
-                    "Download",
-                    &format!("Video {}/{}: đang tải", i + 1, downloads.len()),
-                    false,
-                );
-                let mut local = if src.path.is_file() {
-                    src.clone()
-                } else {
-                    media::download(
-                        &downloads_s,
-                        &src.url,
-                        &source_folder,
-                        src.id.clone(),
-                        &downloads_cancel,
-                    )?
-                };
-                stage(
-                    &downloads_tx,
-                    "Download",
-                    &format!("Video {}: tạo proxy preview", i + 1),
-                    false,
-                );
-                crate::source_normalization::prepare(&normalization,&downloads_s,&mut local,&root,&downloads_cancel)?;
-                sources.push(local);
-            }
-            stage(&downloads_tx, "Download", "Đã tải video và tạo proxy", true);
-            Ok(sources)
-        });
-        (
-            analysis
-                .join()
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("Analysis worker panic"))),
-            download
-                .join()
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("Download worker panic"))),
-        )
-    });
-    // Persist whichever branch succeeded so retry does not throw away paid work or downloads.
-    if let Ok(sources) = &download {
-        p.sources = sources.clone();
-    }
-    if analysis.as_ref().err().is_some_and(providers::url_access_unavailable) && download.is_ok() && s.provider=="antigravity" && s.analysis_input=="auto" {
+    p.script_pipeline=crate::grounded_script::VERSION.into();
+    p.script_presentation=if crate::footage_first::enabled(&p,&s){crate::footage_first::VERSION.into()}else{String::new()};
+    let source_folder=if crate::download_location::needs_download(&p){crate::download_location::folder(&p,&s)?}else{p.root.join("sources")};
+    p.status="Tải video nguồn".into();p.save()?;
+    for index in 0..p.sources.len(){
         process::check_cancel(&cancel)?;
-        stage(&tx,"Analysis","CLI không hoàn tất đọc URL; chuyển sang transcript + ảnh đã tải",false);
-        crate::diagnostics::record(&p.root,"Analysis",None,"url-fallback",serde_json::json!({"error":format!("{:#}",analysis.as_ref().unwrap_err())}))?;
-        p.save()?;
-        analysis=providers::analyze_progress(&p,&s,&cancel,true,&tx);
+        let source=&p.sources[index];
+        stage(&tx,"Download",&format!("Tải video {}/{}",index+1,p.sources.len()),false);
+        let mut local=if source.path.is_file(){source.clone()}else{
+            media::download(&s,&source.url,&source_folder,source.id.clone(),&cancel)?};
+        p.sources[index]=local.clone();p.save()?;
+        crate::source_normalization::prepare(&p.normalization,&s,&mut local,&p.root,&cancel)?;
+        // Imported/local sources may not yet carry duration or audio metadata.
+        if local.duration_ms==0 {
+            let meta=media::probe(&s,&local.path,&cancel)?;
+            local.duration_ms=meta.duration_ms;local.width=meta.width;local.height=meta.height;local.has_audio=meta.has_audio;
+        }
+        p.sources[index]=local;p.save()?;
+        let _=tx.send(Event::Project(Box::new(p.clone())));
     }
-    if download.is_ok() {
-        analysis=analysis.and_then(|plan|providers::finish_source_review(&p,&s,&cancel,plan,Some(&tx)));
-    }
-    if let Ok(plan) = &analysis {
-        apply_plan(&mut p,plan.clone())?;
-    }
-    p.status = "Cần kiểm tra".into();
-    p.save()?;
-    speed_report(&p)?;
-    let _ = tx.send(Event::Project(Box::new(p.clone())));
-    let _ = download?;
-    let _ = analysis?;
-    process::check_cancel(&cancel)?;
-    p.validate(true)?;
-    p.check_duration()?;
-    p.status = "Chờ duyệt kịch bản".into();
-    p.save()?;
+    stage(&tx,"Download","Đã tải và kiểm tra nguồn; bắt đầu transcript + ảnh",true);
+    p.status="Tạo transcript và ảnh nguồn".into();p.save()?;
+    stage(&tx,"Analysis","Tạo transcript Whisper và ảnh có timestamp",false);
+    crate::analysis::prepare(&p,&s,&cancel,|message|stage(&tx,"Analysis",message,false))?;
+    let plan=providers::analyze_progress(&p,&s,&cancel,true,&tx)?;
+    apply_plan(&mut p,plan)?;
+    p.validate(true)?;p.check_duration()?;
+    p.status="Chờ duyệt kịch bản".into();p.save()?;speed_report(&p)?;
+    stage(&tx,"Analysis","Đã dựng kịch bản từ sự kiện và mốc nguồn",true);
+    let _=tx.send(Event::Project(Box::new(p.clone())));
     Ok(p)
 }
 
@@ -256,7 +121,7 @@ fn checkpoint(p: &Project, tx: &Sender<Event>) -> Result<()> {
 
 fn avatar_key(s: &Settings, seg: &Segment) -> String {
     media::hash(format!(
-        "avatar-v4:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
+        "avatar-v5-lipsync:{}:{}:{}:{}:{}:{}:{}:{}:{}",
         s.heygen_base,
         s.avatar_enabled,
         s.avatar_id,
@@ -265,7 +130,6 @@ fn avatar_key(s: &Settings, seg: &Segment) -> String {
         seg.asset_key,
         s.avatar_provider,
         s.cartoon_character,
-        seg.emotion,
         seg.gesture,
     ))
 }
@@ -394,7 +258,7 @@ pub fn generate_speech(
 
 /// Evidence extraction owns no project writes while speech/avatar checkpoints advance.
 pub fn generate_assets(mut p:Project,s:Settings,tx:Sender<Event>,cancel:Cancel)->Result<Project> {
-    if crate::us_editorial::enabled(&p.rules) {
+    if crate::us_editorial::enabled(&p.rules) && !crate::grounded_script::enabled(&p) {
         let plan=crate::script_quality::plan(&p);
         let mut report=crate::script_quality::inspect(&p,&plan,&s,false);
         // Timing after partial WAV generation belongs to the measured recovery
@@ -408,6 +272,11 @@ pub fn generate_assets(mut p:Project,s:Settings,tx:Sender<Event>,cancel:Cancel)-
         }
     }
     thread::scope(|scope| {
+        let mut masked=p.clone();let ms=s.clone();let mtx=tx.clone();let mcancel=cancel.clone();
+        let mask_worker=scope.spawn(move||{
+            let result=crate::source_masks::prepare(&mut masked,&ms,&mcancel,|message|stage(&mtx,"Che nguồn",message,false));
+            (masked.source_masks,result)
+        });
         let revision=evidence_revision(&p);
         let evidence_input=p.clone();
         let mut cards=p.clone();let es=s.clone();let etx=tx.clone();let ecancel=cancel.clone();
@@ -417,12 +286,19 @@ pub fn generate_assets(mut p:Project,s:Settings,tx:Sender<Event>,cancel:Cancel)-
         });
         let root=p.root.clone();let result=generate_assets_core(p,s.clone(),tx.clone(),cancel.clone());
         let (cards,evidence_result)=worker.join().map_err(|_|anyhow::anyhow!("Worker dẫn chứng bị dừng"))?;
+        let (masks,mask_result)=mask_worker.join().map_err(|_|anyhow::anyhow!("Bộ dò vùng che bị dừng"))?;
         let mut p=match result {Ok(p)=>p,Err(error)=>{
             // Keep completed cards alongside the most recent speech/avatar checkpoint.
             if let Ok(mut saved)=Project::load(&root.join("project.json")){merge_evidence(&mut saved,&cards,&evidence_input);let _=checkpoint(&saved,&tx);}
             return Err(error);
         }};
         merge_evidence(&mut p,&cards,&evidence_input);crate::evidence::align(&mut p);p.ensure_composition();
+        mask_result?;p.source_masks=masks;
+        crate::source_masks::prepare(&mut p,&s,&cancel,|message|stage(&tx,"Che nguồn",message,false))?;
+        if crate::source_masks::evidence_pending(&p) {
+            crate::evidence::prepare(&mut p,&s,&cancel,|message|stage(&tx,"Che nguồn",message,false))?;
+            p.ensure_composition();
+        }
         // A measured-duration repair can replace scene/item IDs while the worker
         // still owns the original script. Reconcile against the final script.
         let revised=revision!=evidence_revision(&p);
@@ -548,9 +424,12 @@ fn generate_assets_core(
     for _ in 0..=crate::duration_recovery::MAX_AI_REPAIRS {
         // Check measured segments, not a prior editor composition.
         let mut measured=p.clone();measured.composition=None;
-        if crate::footage_speed::enabled(&measured) { crate::footage_speed::fit(&mut measured)?; }
+        let fit_error=if crate::footage_speed::enabled(&measured) {crate::footage_speed::fit(&mut measured).err()}else{None};
         let editorial=crate::script_quality::inspect(&measured,&crate::script_quality::plan(&measured),&s,true);
-        if measured.check_duration().is_ok() && (!crate::us_editorial::enabled(&measured.rules)||editorial.issues.is_empty()){break;}
+        if let Some(error)=fit_error {
+            if !crate::grounded_script::enabled(&measured)||!editorial.issues.iter().any(|i|i.code=="FOOTAGE_DURATION"){return Err(error);}
+        }
+        if measured.check_duration().is_ok() && (!(crate::us_editorial::enabled(&measured.rules)||crate::grounded_script::enabled(&measured))||editorial.issues.is_empty()){break;}
         let state = crate::duration_recovery::Recovery::load(&p, &s)?;
         let mismatch = crate::duration_recovery::Mismatch::from_project(&measured);
         if mismatch.as_ref().is_some_and(|m|m.shortfall()>0 && m.shortfall()<=crate::duration_recovery::SMALL_SHORTFALL_MS) {
@@ -569,7 +448,8 @@ fn generate_assets_core(
         measured.composition=p.composition.take();p=measured;
         checkpoint(&p,&tx)?;
         let Some(round) = crate::duration_recovery::Recovery::reserve_ai(&p, &s)? else { break; };
-        stage(&tx,"Audio",&format!("Đang sửa lượng lời theo audio thật ({round}/2), giữ WAV không đổi"),false);
+        let repair_limit=if crate::grounded_script::enabled(&p){1}else{crate::duration_recovery::MAX_AI_REPAIRS};
+        stage(&tx,"Audio",&format!("Đang sửa lượng lời theo audio thật ({round}/{repair_limit}), giữ WAV các cảnh không đổi"),false);
         crate::diagnostics::record(&p.root,"Audio",None,"duration_repair",serde_json::json!({"round":round,"measured_ms":p.duration_ms()}))?;
         write_json(&p.root.join("analysis/duration-backups").join(format!("before-{round}.json")),&p)?;
         match providers::repair_duration(&p,&s,&cancel,round) {
@@ -603,7 +483,7 @@ fn generate_assets_core(
         footage_changes = fit_review_footage(&mut fitted)?;
         fitted.validate(true)?;
         fitted.validate_intercuts()?;
-        if crate::us_editorial::enabled(&fitted.rules) {
+        if crate::us_editorial::enabled(&fitted.rules)||crate::grounded_script::enabled(&fitted) {
             let plan=crate::script_quality::plan(&fitted);
             let mut report=crate::script_quality::inspect(&fitted,&plan,&s,true);
             crate::us_editorial::review(&fitted,&s,&plan,&cancel,&mut report)?;
@@ -682,7 +562,7 @@ fn generate_assets_core(
                 &tx,
                 "Avatar",
                 &format!(
-                    "2D local: cảnh {}/{} • Rhubarb + biểu cảm",
+                    "2D local: cảnh {}/{} • Rhubarb nhép miệng",
                     index + 1,
                     p.segments.len()
                 ),
@@ -810,11 +690,8 @@ fn generate_assets_core(
         for seg in &mut p.segments {
             seg.avatar = None;
         }
+        crate::footage_first::prepare_contexts(&p,&s,&cancel)?;
         checkpoint(&p, &tx)?;
-        anyhow::ensure!(
-            !p.segments.iter().any(|seg| seg.kind == "host"),
-            "TTS đã lưu. Cảnh host cần nhân vật; chọn 2D local/HeyGen hoặc đổi loại cảnh thành review."
-        );
     }
     p.status = "Tài nguyên đã sẵn sàng".into();
     checkpoint(&p, &tx)?;

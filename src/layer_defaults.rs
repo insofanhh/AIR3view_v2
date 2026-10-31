@@ -76,7 +76,11 @@ impl LayerDefaults {
     }
 
     pub fn apply(&self, p: &Project, comp: &mut Composition) {
-        for c in &mut comp.clips {
+        self.apply_clips(p, &mut comp.clips);
+    }
+
+    pub(crate) fn apply_clips(&self, p: &Project, clips: &mut [LayerClip]) {
+        for c in clips {
             if let Some(pref) = Self::key(p, c).and_then(|key| self.presets.get(&key)) {
                 pref.apply(c);
             }

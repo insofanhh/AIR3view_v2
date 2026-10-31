@@ -38,6 +38,10 @@ mod project_setup_ui;
 use project_setup_ui::settings_group;
 #[path = "media_settings_ui.rs"]
 mod media_settings_ui;
+#[path = "framed_layout_ui.rs"]
+mod framed_layout_ui;
+#[path = "source_masks_ui.rs"]
+mod source_masks_ui;
 #[path = "layer_ui.rs"]
 mod layer_ui;
 #[path="evidence_ui.rs"]
@@ -60,9 +64,13 @@ enum Page {
     Settings,
 }
 enum Task {
+    MaskScan(bool),
+    MaskTemplate(PathBuf),
+    MaskTemplateRegion(String),
     Normalize,
     LutImport(PathBuf,Option<String>),
     MusicImport(PathBuf),
+    BackgroundImport(PathBuf),
     Automatic { resume: bool },
     Prepare,
     Assets,
@@ -117,6 +125,7 @@ pub struct StudioApp {
     heygen_key_input: String,
     avatar_preview: Option<(String, egui::TextureHandle)>,
     layers: layer_ui::LayerView,
+    masks: source_masks_ui::MaskView,
     evidence_view: evidence_ui::EvidenceView,
     export_location: crate::export_location::ExportLocation,
     metadata_open: bool,
@@ -319,7 +328,8 @@ impl StudioApp {
             cli_args_text,
             heygen_key_input,
             avatar_preview: None,
-            layers: Default::default(),
+            layers: {let mut layers=layer_ui::LayerView::default();layers.framing_scope=2;layers},
+            masks:Default::default(),
             evidence_view:Default::default(),
             export_location: crate::export_location::ExportLocation::load(root.join("export-location.json")),
             metadata_open: std::env::args().any(|a|a=="--metadata=open"),
@@ -342,6 +352,7 @@ impl StudioApp {
         app.timeline_view.cursor=crate::timeline::starts(&app.project).get(app.selected).copied().unwrap_or(0);
         if let Some(ms)=std::env::args().find_map(|a|a.strip_prefix("--preview-ms=").and_then(|v|v.parse().ok())) {app.timeline_view.cursor=ms;}
         if std::env::args().any(|a|a=="--layer=avatar"){app.select_timeline_layer(crate::timeline::AVATAR);}
+        if std::env::args().any(|a|a=="--layer=video"){app.select_timeline_layer(crate::timeline::VIDEO);}
         app.request_frame();
         if app.capture_path.is_some() {
             if std::env::args().any(|a|a=="--capture-evidence-source") {
@@ -376,6 +387,7 @@ impl StudioApp {
         p.root = self.projects_root.join(&p.id);
         self.project = p;
         self.layers = Default::default();
+        self.masks=Default::default();
         self.page = Page::Editor;
         self.setup_open = true;
         self.workflow_state = None;
@@ -424,6 +436,8 @@ impl StudioApp {
     fn remember_project_defaults(&mut self) -> anyhow::Result<()> {
         let root = self.projects_root.parent().context("Thiếu thư mục cấu hình")?;
         let mut defaults = self.presets.next_defaults.clone().unwrap_or_else(||ProjectDefaults::from_project(&self.project));
+        crate::framed_layout::pin(root,&mut defaults.output.layout)?;
+        crate::source_masks::pin(root,&mut defaults.source_masks)?;
         if let Some(prod)=&mut defaults.production {crate::input_assets::pin_production(root,prod)?;}
         write_json(&root.join("project-defaults.json"), &defaults)?;
         if self.presets.next_defaults.is_none(){self.project.layer_defaults = defaults.layer_defaults;}
@@ -447,6 +461,7 @@ impl StudioApp {
                 self.player.stop();
                 self.project = p;
                 self.layers=Default::default();
+                self.masks=Default::default();
                 self.timeline_view.cursor=0;
                 self.setup_open = self.project.segments.is_empty();
                 self.workflow_state = crate::workflow::JobState::load(&self.project.root).filter(|job|job.project_id==self.project.id);
@@ -634,7 +649,7 @@ impl StudioApp {
                 Ok(sources) if !sources.is_empty() => {
                     let same = sources.len()==self.project.sources.len() && sources.iter().zip(&self.project.sources).all(|(a,b)|a.id==b.id && a.url==b.url && a.path==b.path);
                     self.project.sources=sources;
-                    if !same { self.project.segments.clear(); }
+                    if !same { self.project.segments.clear();self.project.source_masks.regions.clear();self.project.source_masks.ignored.clear();self.project.source_masks.scan_key.clear();self.project.source_masks.report.clear(); }
                     self.project.input_urls=self.urls.clone();
                 }
                 Ok(_) => { self.message("Thêm ít nhất một URL hoặc video từ máy.",true); return; }
@@ -667,6 +682,25 @@ impl StudioApp {
         thread::spawn(move || {
             let result = (|| -> anyhow::Result<Project> {
                 match task {
+                    Task::MaskScan(force)=>{
+                        let mut p=p;
+                        let progress=|message:&str|{let _=tx.send(Event::Stage{lane:"Che nguồn".into(),message:message.into(),done:false});};
+                        if force {crate::source_masks::scan(&mut p,&s,&cancel,true,progress)?;}else{crate::source_masks::prepare(&mut p,&s,&cancel,progress)?;}
+                        if p.evidence_settings.enabled {crate::evidence::prepare(&mut p,&s,&cancel,|_|{})?;p.ensure_composition();}
+                        let _=tx.send(Event::Stage{lane:"Che nguồn".into(),message:p.source_masks.report.clone(),done:true});p.save()?;Ok(p)
+                    },
+                    Task::MaskTemplate(path)=>{
+                        let mut p=p;let t=crate::source_masks::import_template(&path,&data_dir().join("assets/mask-templates"),0.)?;
+                        p.source_masks.templates.push(t);p.source_masks.scan_key.clear();p.save()?;Ok(p)
+                    },
+                    Task::MaskTemplateRegion(id)=>{
+                        let mut p=p;let r=p.source_masks.regions.iter().find(|r|r.id==id).context("Chọn vùng logo trước")?.clone();
+                        let src=p.source(&r.source_id)?;let img=media::frame(&s,src.input_path(),r.start_ms+(r.end_ms-r.start_ms)/2,&cancel)?;let b=r.rect;
+                        let x=(b.x*img.width() as f32) as u32;let y=(b.y*img.height() as f32) as u32;
+                        let roi=image::imageops::crop_imm(&img,x,y,((b.w*img.width() as f32) as u32).max(1).min(img.width()-x),((b.h*img.height() as f32) as u32).max(1).min(img.height()-y)).to_image();
+                        let tmp=tempfile::Builder::new().suffix(".png").tempfile()?;roi.save(tmp.path())?;
+                        let mut t=crate::source_masks::import_template(tmp.path(),&data_dir().join("assets/mask-templates"),b.w)?;t.name=format!("Logo {}",p.source_masks.templates.len()+1);p.source_masks.templates.push(t);p.source_masks.scan_key.clear();p.save()?;Ok(p)
+                    },
                     Task::Normalize=>{
                         let mut p=p;
                         for source in &mut p.sources{crate::source_normalization::prepare(&p.normalization,&s,source,&p.root,&cancel)?;}
@@ -725,8 +759,16 @@ impl StudioApp {
                         p.save()?;
                         Ok(p)
                     }
+                    Task::BackgroundImport(path) => {
+                        let mut p=p;
+                        p.output.layout.background=crate::input_assets::avatar_image(&path,&data_dir().join("assets/backgrounds"))
+                            .context("Không nhập được ảnh nền PNG / JPEG")?;
+                        crate::framed_layout::refresh(&mut p,false);p.rendered=None;p.save()?;Ok(p)
+                    }
                     Task::Render => {
                         let mut p = p;
+                        crate::source_masks::prepare(&mut p,&s,&cancel,|msg|{let _=tx.send(Event::Stage{lane:"Che nguồn".into(),message:msg.into(),done:false});})?;
+                        if crate::source_masks::evidence_pending(&p){crate::evidence::prepare(&mut p,&s,&cancel,|_|{})?;p.ensure_composition();}
                         let path = export_path.context("Chưa chọn thư mục xuất video")?;
                         media::render(&p, &s, &path, &cancel, |n, t| {
                             let _ = tx.send(Event::Stage {
@@ -793,7 +835,7 @@ impl StudioApp {
         if !self.preview_final && !self.project.segments.is_empty() {
             self.project.ensure_composition();
             self.layers.live=true;
-            self.player.composition(self.project.clone(),self.settings.clone(),self.timeline_view.cursor,false);
+            self.player.composition(self.mask_preview(),self.settings.clone(),self.timeline_view.cursor,false);
             return;
         }
         self.layers.live=false;
@@ -1211,6 +1253,7 @@ impl StudioApp {
         }
     }
     fn output_settings(&mut self, ui: &mut egui::Ui) {
+        self.framed_layout_settings(ui);
         self.footage_speed_settings(ui);
         settings_group(ui, "output_original_audio", "Âm thanh video gốc", false, |ui| self.original_audio_controls(ui));
         let old_output=self.project.output.clone();
@@ -1223,8 +1266,8 @@ impl StudioApp {
         let o = &mut self.project.output;
         let _frame_header=egui::CollapsingHeader::new("Khung video đầu ra").id_salt("output_frame").default_open(!self.setup_open).show(ui,|ui|{
         ui.checkbox(&mut o.editorial, "Nền sáng / thẻ thông tin theo mẫu");
-        ui.checkbox(&mut o.blur_background, "Nền video mờ (theo clip gốc)");
-        if ui.button("Áp dụng bố cục review mẫu").clicked() {
+        ui.add_enabled(!o.layout.enabled,egui::Checkbox::new(&mut o.blur_background, "Nền video mờ (theo clip gốc)"));
+        if ui.add_enabled(!o.layout.enabled,egui::Button::new("Áp dụng bố cục review mẫu")).clicked() {
             o.editorial = true;
             o.fit = "contain".into();
             o.scale = 0.86;
@@ -1245,13 +1288,15 @@ impl StudioApp {
                     ui.selectable_value(&mut o.resolution, n, format!("{n}p"));
                 }
             });
-        ui.horizontal(|ui| {
+        ui.add_enabled_ui(!o.layout.enabled,|ui|{ui.horizontal(|ui| {
             ui.selectable_value(&mut o.fit, "contain".into(), "Vừa khung");
             ui.selectable_value(&mut o.fit, "cover".into(), "Lấp đầy / crop");
         });
         ui.add(egui::Slider::new(&mut o.scale, 0.2..=3.0).text("Scale"));
         ui.add(egui::Slider::new(&mut o.x, 0.0..=1.0).text("Vị trí X"));
         ui.add(egui::Slider::new(&mut o.y, 0.0..=1.0).text("Vị trí Y"));
+        });
+        if o.layout.enabled{ui.label(RichText::new("Khung và crop được chỉnh tại Nền & bố cục ở trên hoặc trong Layer.").small().color(MUTED));}
         });
         #[cfg(test)] self.hitboxes.insert("output_frame_header".into(),_frame_header.header_response.rect);
         let _avatar_header=egui::CollapsingHeader::new("Nhân vật ở góc màn hình").id_salt("output_avatar").default_open(!self.setup_open).show(ui,|ui|{
@@ -2201,7 +2246,7 @@ impl StudioApp {
         self.youtube_cookie_settings(ui);
         ui.add_space(12.0);
         self.asr_settings(ui);
-        ui.columns(2,|cols|{panel().show(&mut cols[0],|ui|{heading(ui,"GEMINI / ANTIGRAVITY");ui.horizontal(|ui|{ui.selectable_value(&mut self.settings.provider,"antigravity".into(),"Antigravity CLI");ui.selectable_value(&mut self.settings.provider,"gemini".into(),"Gemini API");});if self.settings.provider=="antigravity"{egui::ComboBox::from_id_salt("analysis_input").selected_text(match self.settings.analysis_input.as_str(){"local"=>"Transcript + ảnh","url"=>"Chỉ URL trực tiếp",_=>"Tự động: URL → fallback local"}).show_ui(ui,|ui|{ui.selectable_value(&mut self.settings.analysis_input,"auto".into(),"Tự động: thử URL cùng lúc tải");ui.selectable_value(&mut self.settings.analysis_input,"url".into(),"Chỉ URL trực tiếp (dừng nếu không đọc được)");ui.selectable_value(&mut self.settings.analysis_input,"local".into(),"Transcript + ảnh sau tải");});field(ui,"Model CLI",&mut self.settings.cli_model);field(ui,"CLI executable / node.exe",&mut self.settings.cli_path);field(ui,"CLI argv (JSON array)",&mut self.cli_args_text);ui.label(RichText::new("URL được gửi ngay cùng lúc tải video; chế độ Tự động chuyển sang bằng chứng local nếu CLI không đọc được URL.").size(12.0).color(MUTED));ui.add(egui::Slider::new(&mut self.settings.visual_sample_seconds,1..=10).text("Giây / ảnh"));}else{field(ui,"Model Gemini API",&mut self.settings.gemini_model);field(ui,"Gemini API base",&mut self.settings.gemini_base);field(ui,"Tên biến môi trường API key",&mut self.settings.gemini_key_env);}
+        ui.columns(2,|cols|{panel().show(&mut cols[0],|ui|{heading(ui,"GEMINI / ANTIGRAVITY");ui.horizontal(|ui|{ui.selectable_value(&mut self.settings.provider,"antigravity".into(),"Antigravity CLI");ui.selectable_value(&mut self.settings.provider,"gemini".into(),"Gemini API");});if self.settings.provider=="antigravity"{field(ui,"Model CLI",&mut self.settings.cli_model);field(ui,"CLI executable / node.exe",&mut self.settings.cli_path);field(ui,"CLI argv (JSON array)",&mut self.cli_args_text);ui.label(RichText::new("Tải nguồn → transcript + ảnh → trích sự kiện → viết kịch bản. Không phân tích URL trong lúc tải.").size(12.0).color(MUTED));ui.add(egui::Slider::new(&mut self.settings.visual_sample_seconds,1..=10).text("Giây / ảnh"));}else{field(ui,"Model Gemini API",&mut self.settings.gemini_model);field(ui,"Gemini API base",&mut self.settings.gemini_base);field(ui,"Tên biến môi trường API key",&mut self.settings.gemini_key_env);}
             ui.add_space(16.0);self.voice_settings(ui);});
             panel().show(&mut cols[1],|ui|{self.avatar_settings(ui);ui.add_space(12.0);heading(ui,"MEDIA TOOLS");field(ui,"FFmpeg",&mut self.settings.ffmpeg);field(ui,"ffprobe",&mut self.settings.ffprobe);field(ui,"yt-dlp",&mut self.settings.ytdlp);field(ui,"Python cho ASR",&mut self.settings.python);egui::ComboBox::from_id_salt("encoder").selected_text(&self.settings.encoder).show_ui(ui,|ui|{for e in["libx264","h264_nvenc","h264_qsv"]{ui.selectable_value(&mut self.settings.encoder,e.to_string(),e);}});});});
         ui.add_space(14.0);ui.horizontal(|ui|{if primary(ui,"Lưu cấu hình").clicked(){match self.save_settings(){Ok(())=>self.message("Đã lưu cấu hình",false),Err(e)=>self.message(format!("{e:#}"),true)}}

@@ -2,6 +2,8 @@
 use serde::{Deserialize, Deserializer};
 
 pub const CONTRACT_VERSION: &str = "review-language-v1";
+// Writing metadata policy must not invalidate previously generated speech takes.
+pub const WRITING_POLICY_VERSION: &str = "script-language-v2-internal-summary";
 pub fn canonical(value: &str) -> String {
     match value.trim().to_lowercase().replace('_', "-").as_str() {
         "vi" | "vie" | "vi-vn" | "vietnamese" | "tiếng việt" | "tieng viet" => "vi".into(),
@@ -24,7 +26,16 @@ pub fn text<'a>(value: &str, vi: &'a str, en: &'a str) -> &'a str { if english(v
 
 pub fn contract(value: &str) -> String {
     let language = if english(value) { "English" } else { "Vietnamese (Tiếng Việt)" };
-    format!("OUTPUT LANGUAGE CONTRACT {CONTRACT_VERSION}: {language}. The selected output language takes precedence over conflicting language instructions in the style prompt. Generate directly in {language}, without an intermediate translation pass. All viewer-facing title, analysis_summary, narration, caption (including source scenes), graphics.label/value, evidence_items.label/claim/unit, annotations.text and explanations must use {language}. Keep proper names and verified numbers unchanged; use unambiguous month names for dates. JSON keys, enums, IDs and timestamps stay unchanged. proof.quote, proof.start_quote and proof.end_quote MUST remain exact original source quotations for verification; never translate these internal proof fields. Use claim for the translated viewer-facing explanation. Source pixels/audio retain their original language. For a source scene with intelligible speech, supply a faithful {language} caption from the evidence; otherwise leave caption empty rather than inventing speech. anchor_phrase must be an exact substring of that scene's {language} narration. Preserve locked scenes even when their language differs; do not silently translate locked edits.")
+    format!("OUTPUT LANGUAGE CONTRACT {CONTRACT_VERSION}, WRITING POLICY {WRITING_POLICY_VERSION}: {language}. The selected output language takes precedence over conflicting language instructions in the style prompt. Generate directly in {language}, without an intermediate translation pass. Viewer-facing title, narration, caption (including source scenes), graphics.label/value, evidence_items.label/claim/unit and annotations.text must use {language}. analysis_summary is INTERNAL EDITOR METADATA: Vietnamese or the selected language is acceptable. It is never narration, subtitles or a video card; do not translate it or change scenes just to match the viewer language. Keep proper names and verified numbers unchanged; use unambiguous month names for dates. JSON keys, enums, IDs and timestamps stay unchanged. proof.quote, proof.start_quote and proof.end_quote MUST remain exact original source quotations for verification; never translate these internal proof fields. Internal evidence explanations may retain their language. Use claim for the translated viewer-facing explanation. Source pixels/audio retain their original language. For a source scene with intelligible speech, supply a faithful {language} caption from the evidence; otherwise leave caption empty rather than inventing speech. anchor_phrase must be an exact substring of that scene's {language} narration. Preserve locked scenes even when their language differs; do not silently translate locked edits.")
+}
+
+pub fn field_label(path: &str) -> &'static str {
+    if path=="title" {"Tiêu đề dự án"}
+    else if path.ends_with(".narration") {"Lời đọc"}
+    else if path.ends_with(".caption") {"Phụ đề"}
+    else if path.contains(".annotations[") {"Chú thích ảnh dẫn chứng"}
+    else if path.contains(".evidence_items[") {"Nội dung thẻ dẫn chứng"}
+    else {"Nội dung thẻ thông tin"}
 }
 
 /// Conservative statistical check: short names, acronyms, numbers and quoted source

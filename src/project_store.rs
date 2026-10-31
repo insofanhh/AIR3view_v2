@@ -144,6 +144,7 @@ pub fn inspect(library: &Path, path: &Path) -> Result<DeleteInfo> {
 }
 
 pub fn uses_directory(project: &Project, root: &Path) -> bool {
+    if within(&project.output.layout.background,root){return true;}
     if project.production.as_ref().is_some_and(|p|production_uses(p,root)) {return true;}
     if project.composition.as_ref().is_some_and(|c|c.clips.iter().any(|c|c.media.as_ref().into_iter().chain(c.proxy.as_ref()).any(|p|within(p,root)))) {return true;}
     let paths = project
@@ -169,7 +170,7 @@ pub fn uses_directory(project: &Project, root: &Path) -> bool {
         })
 }
 fn within(path:&Path,root:&Path)->bool {
-    !path.as_os_str().is_empty()&&fs::canonicalize(path).unwrap_or_else(|_|path.to_owned()).starts_with(root)
+    !path.as_os_str().is_empty()&&fs::canonicalize(path).unwrap_or_else(|_|path.to_owned()).starts_with(fs::canonicalize(root).unwrap_or_else(|_|root.to_owned()))
 }
 fn production_uses(p:&crate::model::ProductionSettings,root:&Path)->bool {
     [&p.voice_reference_path,&p.avatar_image_path].into_iter().any(|v|within(Path::new(v),root))
@@ -182,7 +183,7 @@ fn check_saved_references(data:&Path,root:&Path)->Result<()> {
             fn references(v:&serde_json::Value,root:&Path)->bool {
                 match v {
                     serde_json::Value::Object(o)=>o.iter().any(|(k,v)|
-                        (matches!(k.as_str(),"voice_reference_path"|"avatar_image_path")&&v.as_str().is_some_and(|s|within(Path::new(s),root)))||references(v,root)),
+                        (matches!(k.as_str(),"voice_reference_path"|"avatar_image_path"|"background")&&v.as_str().is_some_and(|s|within(Path::new(s),root)))||references(v,root)),
                     serde_json::Value::Array(a)=>a.iter().any(|v|references(v,root)),
                     _=>false,
                 }

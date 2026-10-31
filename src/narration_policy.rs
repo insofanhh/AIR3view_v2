@@ -21,12 +21,15 @@ pub const LEGACY_CRITICAL_BLOCK: &str = r#"## CRITICAL PATCH RULES FOR AI SCRIPT
 2. **NO HOOK-TO-SETUP REPETITION:** Sentence 2 (Setup) must NEVER repeat the time, location, or "emergency call" already mentioned in Sentence 1 (Hook). Sentence 2 must immediately advance the physical action inside the scene.
 3. **WORD REPETITION CHECK:** Never use the same preposition or noun twice in the same sentence (e.g., BANNED: "Inside, officers approach... from inside")."#;
 
+/// Exact retired preset paragraph; used only to clean saved prompts.
+pub const RETIRED_AVATAR_BLOCK: &str = r#"SOURCE AND AVATAR SYNC: Follow the supplied AIR3view JSON schema. Put source timestamps in in_ms/out_ms and explain the original-audio moment in evidence. Use actual source scenes for original audio when enabled, not silent gaps. Narration contains only words to be spoken; no [Raw Audio Cue], [Avatar Emotion], scene headings, stage directions or timestamps. Map Shocked to emotion=surprised, Serious to serious, Tense and Somber to concerned. During injury, death or victim-impact discussion use concerned or serious with gesture=none; never cheerful greetings, smiling, laughing or waving. Motion should be restrained during these moments. Other gestures must use the supported schema values."#;
+
 pub fn migrate(prompt:&str)->String {
     let normalized=prompt.replace("\r\n","\n");
     if normalized.trim()==PREVIOUS_PRESET.replace("\r\n","\n").trim() {
         return crate::reaction_prompt::DEFAULT_REACTION_PROMPT.into();
     }
-    let replaced=normalized.replace(LEGACY_CRITICAL_BLOCK, CONTRACT.trim());
+    let replaced=normalized.replace(LEGACY_CRITICAL_BLOCK, CONTRACT.trim()).replace(RETIRED_AVATAR_BLOCK, "");
     let changed=replaced!=normalized;
     if changed {replaced}else{prompt.to_owned()}
 }
@@ -108,6 +111,14 @@ mod tests {
         assert_eq!(migrate("My unrelated custom prompt"),"My unrelated custom prompt");
         let different=LEGACY_CRITICAL_BLOCK.replace("booking charges","my custom charges");
         assert!(migrate(&different).contains("my custom charges"));
+    }
+    #[test] fn retired_avatar_rules_are_removed_from_saved_and_custom_prompts() {
+        let custom=format!("My tone for {{duration}}.\r\n{RETIRED_AVATAR_BLOCK}\r\nKeep this sentence.");
+        let cleaned=migrate(&custom);
+        assert!(!cleaned.contains("SOURCE AND AVATAR SYNC"));
+        assert!(cleaned.contains("My tone for {duration}.")&&cleaned.contains("Keep this sentence."));
+        assert_eq!(migrate(&cleaned),cleaned);
+        assert!(!migrate(PREVIOUS_PRESET).contains("SOURCE AND AVATAR SYNC"));
     }
     #[test] fn meta_references_block_but_quotes_raw_dialogue_and_locks_remain_faithful() {
         for line in ["In this clip, police approach.","The video doesn't provide a final outcome.","Trong video này, cảnh sát bước vào."] {

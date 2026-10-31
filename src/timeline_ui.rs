@@ -185,7 +185,7 @@ impl StudioApp {
         self.preview_final=false;self.preview_scene=None;
         self.timeline_view.full_preview=false;self.layers.live=true;
         self.texture=None;self.blurred_texture=None;
-        self.player.composition(self.project.clone(),self.settings.clone(),ms,true);
+        self.player.composition(self.mask_preview(),self.settings.clone(),ms,true);
     }
     fn step_timeline(&mut self, forward: bool) {
         let fps = self.project.output.fps.max(1) as f64;

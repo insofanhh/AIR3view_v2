@@ -108,7 +108,7 @@ impl StudioApp {
             self.evidence_view.sound_notice=format!("Áp dụng {}/{} SFX · khóa: {} · âm riêng: {}",report.updated,report.total,report.locked,report.custom);
             if self.preview_final {
                 let playing=self.player.playing;self.preview_final=false;self.preview_scene=None;self.texture=None;self.blurred_texture=None;
-                self.player.composition(self.project.clone(),self.settings.clone(),self.timeline_view.cursor,playing);
+                self.player.composition(self.mask_preview(),self.settings.clone(),self.timeline_view.cursor,playing);
             }else{self.player.refresh_sfx(&self.project);}
         }
         if listen {

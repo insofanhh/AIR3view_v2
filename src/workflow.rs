@@ -68,8 +68,8 @@ fn stage_keys(p:&Project,s:&Settings)->StageKeys {
     let sources:Vec<_>=p.sources.iter().map(|v|(&v.id,if v.url.is_empty(){
         let m=fs::metadata(&v.path).ok();format!("{}:{:?}:{:?}",v.path.display(),m.as_ref().map(|m|m.len()),m.and_then(|m|m.modified().ok()))
     }else{v.url.clone()})).collect();
-    let prepare=media::hash(serde_json::to_vec(&(crate::script_quality::VERSION,sources,&p.input_urls,&p.rules,&p.evidence_settings,
-        (&s.provider,&s.cli_path,&s.cli_args,&s.cli_model,&s.analysis_input,&s.gemini_base,&s.gemini_model,
+    let prepare=media::hash(serde_json::to_vec(&(crate::script_quality::VERSION,crate::footage_first::VERSION,s.avatar_enabled,sources,&p.input_urls,&p.rules,&p.evidence_settings,
+        (&s.provider,&s.cli_path,&s.cli_args,&s.cli_model,crate::grounded_script::VERSION,&s.gemini_base,&s.gemini_model,
         s.visual_sample_seconds,&s.asr_model,&s.asr_language))).unwrap());
     let assets=media::hash(serde_json::to_vec(&("assets-duration-recovery-v2",&prepare,&s.vieneu_url,&s.voice,s.voice_reference_enabled,s.voice_reference_denoise,
         crate::input_assets::file_fingerprint(&s.voice_reference_path),s.avatar_enabled,&s.avatar_provider,&s.cartoon_character,
@@ -186,7 +186,6 @@ pub fn preflight(p: &Project, s: &Settings) -> Result<()> {
         "Vùng bắt buộc giữ và loại bỏ đang chồng lên nhau."
     );
     if s.provider == "gemini" {
-        ensure!(p.sources.iter().all(|src|!src.url.is_empty()),"Gemini URL cần nguồn YouTube; chọn Antigravity để phân tích video từ máy.");
         ensure!(
             crate::providers::environment_key(&s.gemini_key_env).is_some(),
             "Chưa cấu hình Gemini API key trong Cài đặt kết nối."
@@ -602,6 +601,8 @@ mod tests {
         assert_eq!(keys.changed_phase(&stage_keys(&changed,&s)),Phase::Prepare);
         let voice=Settings{voice:"Another voice".into(),..s.clone()};
         assert_eq!(keys.changed_phase(&stage_keys(&p,&voice)),Phase::Assets);
+        let avatar=Settings{avatar_enabled:!s.avatar_enabled,..s.clone()};
+        assert_eq!(keys.changed_phase(&stage_keys(&p,&avatar)),Phase::Prepare);
         let lease=JobLease::acquire(temp.path()).unwrap();
         assert!(JobLease::acquire(temp.path()).is_err());drop(lease);
         assert!(JobLease::acquire(temp.path()).is_ok());

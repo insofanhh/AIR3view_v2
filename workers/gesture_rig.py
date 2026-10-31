@@ -7,7 +7,7 @@ import math
 import re
 
 
-def plan_gestures(text, words, mouth_cues, emotion, style, duration):
+def plan_gestures(text, words, mouth_cues, style, duration):
     if style == "none":
         return []
     speech = [c for c in mouth_cues if c["value"] != "X"]
@@ -32,9 +32,7 @@ def plan_gestures(text, words, mouth_cues, emotion, style, duration):
         token = re.sub(r"[^\w]", "", word["text"].lower())
         kind = style
         if kind == "auto":
-            if emotion == "surprised" and not events:
-                kind = "surprised"
-            elif token in {"nhìn", "xem", "đây", "kìa", "watch", "look"}:
+            if token in {"nhìn", "xem", "đây", "kìa", "watch", "look"}:
                 kind = "point"
             elif token in {"sao", "nào", "vì", "nhưng", "nghĩa", "why", "how"}:
                 kind = "open_palms"

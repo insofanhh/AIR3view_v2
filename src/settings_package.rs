@@ -23,6 +23,8 @@ pub enum AssetKind {
     Reference,
     Music,
     Lut,
+    Background,
+    LogoTemplate,
 }
 impl AssetKind {
     pub fn label(self) -> &'static str {
@@ -31,6 +33,8 @@ impl AssetKind {
             Self::Reference => "Giọng tham chiếu",
             Self::Music => "Nhạc nền",
             Self::Lut => "LUT màu",
+            Self::Background => "Ảnh nền",
+            Self::LogoTemplate => "Mẫu logo",
         }
     }
     pub fn extensions(self) -> &'static [&'static str] {
@@ -39,6 +43,8 @@ impl AssetKind {
             Self::Reference => &["wav", "mp3", "flac", "ogg", "m4a"],
             Self::Music => &["mp3", "wav", "m4a", "flac", "ogg"],
             Self::Lut => &["cube"],
+            Self::Background => &["png", "jpg", "jpeg"],
+            Self::LogoTemplate => &["png", "jpg", "jpeg"],
         }
     }
     fn limit(self) -> u64 {
@@ -47,6 +53,8 @@ impl AssetKind {
             Self::Reference => 64,
             Self::Music => 256,
             Self::Lut => 16,
+            Self::Background => 32,
+            Self::LogoTemplate => 16,
         }) * 1024
             * 1024
     }
@@ -79,6 +87,12 @@ fn paths(
     settings: &mut ProjectDefaults,
     mut map: impl FnMut(AssetKind, &str) -> Result<String>,
 ) -> Result<()> {
+    for template in &mut settings.source_masks.templates {
+        template.path=map(AssetKind::LogoTemplate,&template.path.to_string_lossy())?.into();
+    }
+    if !settings.output.layout.background.as_os_str().is_empty() {
+        settings.output.layout.background=map(AssetKind::Background,&settings.output.layout.background.to_string_lossy())?.into();
+    }
     if !settings.music.file.as_os_str().is_empty() {
         settings.music.file = map(AssetKind::Music, &settings.music.file.to_string_lossy())?.into();
     }
@@ -380,6 +394,7 @@ fn validate_settings(settings: &ProjectDefaults, files: bool) -> Result<()> {
     let mut p = Project::default();
     cfg.apply(&mut p);
     p.validate_configuration()?;
+    if files {crate::framed_layout::check_file(&p)?;}
     let _ = crate::export_metadata::prepare(&p, &Settings::default())?;
     ensure!(
         cfg.layer_defaults.presets.len() <= 256 && cfg.layer_defaults.effects.len() <= 256,

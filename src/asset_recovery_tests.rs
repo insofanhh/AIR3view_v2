@@ -50,10 +50,18 @@ fn background_repair_tracks_selection_preserves_edits_and_recovers_after_restart
     // Preview repairs without an export or provider call.
     let mut preview=player::Player::default();preview.composition(p.clone(),s.clone(),0,false);
     let mut delivered=false;
-    while let Ok(event)=preview.rx.recv_timeout(Duration::from_secs(20)) {match event {
-        player::PlayerEvent::Layers{frames,..}=>{assert!(frames.iter().any(|(id,_)|id==&baseline.id));delivered=true;break;},
-        player::PlayerEvent::Error{message,..}=>panic!("{message}"),_=>{}
-    }}
+    // Debug image convolution competes with real ASR/render jobs on QA hosts.
+    // A fixed overall deadline tolerates scheduling gaps while still requiring
+    // an actual repaired image and a delivered preview frame.
+    let deadline=std::time::Instant::now()+Duration::from_secs(60);
+    while let Some(remaining)=deadline.checked_duration_since(std::time::Instant::now()) {
+        match preview.rx.recv_timeout(remaining.min(Duration::from_millis(250))) {
+            Ok(player::PlayerEvent::Layers{frames,..})=>{assert!(frames.iter().any(|(id,_)|id==&baseline.id));delivered=true;break;},
+            Ok(player::PlayerEvent::Error{message,..})=>panic!("{message}"),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)=>break,
+            _=>{}
+        }
+    }
     assert!(delivered&&path.is_file());
     fs::write(&path,b"corrupt cache").unwrap();evidence::prepare_backgrounds(&p,&s,&cancel).unwrap();assert!(image::image_dimensions(&path).is_ok());
 }

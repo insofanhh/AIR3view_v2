@@ -230,10 +230,6 @@ fn scene_details(ui: &mut egui::Ui, s: &mut Segment, geo: &mut SceneGeometry, la
         .id_salt("scene_actor")
         .show(ui, |ui| {
             ui.add_enabled_ui(s.kind != "source", |ui| {
-                label(ui, "Cảm xúc / cách đọc");
-                let response =
-                    ui.add(egui::TextEdit::singleline(&mut s.emotion).desired_width(f32::INFINITY));
-                geo.record("scene_emotion", response.rect);
                 label(ui, "Cử chỉ tay");
                 egui::ComboBox::from_id_salt("scene_gesture")
                     .width(ui.available_width() - 4.)
@@ -480,7 +476,7 @@ impl StudioApp {
         if s.narration != old.narration || s.kind != old.kind {
             s.invalidate_voice();
         }
-        if s.gesture != old.gesture || s.emotion != old.emotion {
+        if s.gesture != old.gesture {
             s.avatar = None;
             s.avatar_key.clear();
         }

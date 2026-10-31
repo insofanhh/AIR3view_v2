@@ -315,7 +315,7 @@ pub fn render_segment(
     if output.is_file() && probe(settings, &output, cancel).is_ok() {
         return Ok(output);
     }
-    if (s.source_rate-1.).abs()>0.00001 || !s.footage_spans.is_empty() {
+    if p.output.layout.enabled || p.output.layout.crop_unframed || (s.source_rate-1.).abs()>0.00001 || !s.footage_spans.is_empty() || (s.kind=="host"&&s.avatar.is_none()) {
         let mut scene=p.clone();scene.segments=vec![s.clone()];scene.composition=None;scene.ensure_composition();
         crate::layer_media::export(&scene,settings,&output,cancel)?;
         return Ok(output);
@@ -543,7 +543,7 @@ pub fn render<F: FnMut(usize, usize)>(
 ) -> Result<()> {
     p.validate(true)?;
     p.check_duration()?;
-    if p.music.enabled || p.effects.footage.active() || !p.effects.layers.is_empty() {
+    if p.source_masks.enabled || p.output.layout.enabled || p.output.layout.crop_unframed || p.music.enabled || p.effects.footage.active() || !p.effects.layers.is_empty() {
         let mut prepared=p.clone();prepared.ensure_composition();
         crate::layer_media::export_with_progress(&prepared,settings,output,cancel,progress)?;return Ok(());
     }

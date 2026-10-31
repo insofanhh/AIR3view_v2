@@ -108,11 +108,12 @@ pub fn fit(p:&mut Project)->Result<Vec<String>> {
             let mut begin=s.in_ms;
             let mut end=s.in_ms+scaled(s.duration_ms,requested).min(s.out_ms-s.in_ms);
             if end-s.in_ms<s.duration_ms {
-                if cfg.allow_host && !s.footage_anchors.iter().any(|a|a.manual) {
+                if cfg.allow_host && next.script_presentation!=crate::footage_first::VERSION && !s.footage_anchors.iter().any(|a|a.manual) {
                     s.kind="host".into();s.footage_status="Chuyển Host: không đủ footage trong vùng đã chọn".into();
                     messages.push(format!("Cảnh {}: {}",i+1,s.footage_status));next.segments[i]=s;continue;
                 }
-                anyhow::bail!("Cảnh {}: voice {:.2}s nhưng vùng nguồn chỉ {:.2}s. Mở rộng điểm cắt trong cùng tình huống hoặc bật chuyển Host; voice được giữ nguyên.",i+1,s.duration_ms as f64/1000.,(s.out_ms-s.in_ms) as f64/1000.);
+                let advice=if next.script_presentation==crate::footage_first::VERSION {"Mở rộng điểm cắt trong cùng tình huống hoặc rút lời; chế độ không nhân vật chỉ dùng một Host ngắn"}else{"Mở rộng điểm cắt trong cùng tình huống hoặc bật chuyển Host"};
+                anyhow::bail!("Cảnh {}: voice {:.2}s nhưng vùng nguồn chỉ {:.2}s. {advice}; voice được giữ nguyên.",i+1,s.duration_ms as f64/1000.,(s.out_ms-s.in_ms) as f64/1000.);
             }
             ensure!(!fixed || end-s.in_ms+2>=scaled(s.duration_ms,requested),"Cảnh {}: không đủ footage cho tốc độ cố định {requested:.2}×. Chọn Tự động hoặc mở rộng vùng nguồn; voice giữ nguyên.",i+1);
             let mut points=vec![];

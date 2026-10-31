@@ -4,6 +4,9 @@ pub mod background_music;
 mod media_upgrades_tests;
 pub mod visual_effects;
 pub mod source_normalization;
+pub mod source_masks;
+#[cfg(test)]
+mod source_masks_tests;
 pub mod asr;
 pub mod app;
 pub mod branding;
@@ -16,6 +19,11 @@ pub mod duration_recovery;
 pub mod date_filter;
 pub mod download_location;
 pub mod footage_speed;
+pub mod footage_first;
+pub mod grounded_script;
+pub mod framed_layout;
+#[cfg(test)]
+mod framed_layout_tests;
 pub mod evidence;
 pub mod evidence_selection;
 pub mod evidence_sfx;

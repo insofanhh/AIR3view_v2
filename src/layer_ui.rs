@@ -11,6 +11,8 @@ pub(super) struct LayerView {
     pub(super) selected:Option<String>,
     drag:Option<LayerDrag>,
     pub(super) clipboard:Option<Vec<crate::composition::LayerClip>>,
+    pub(super) content_edit:bool,
+    pub(super) framing_scope:u8,
 }
 struct LayerDrag {before:Project,transform:Transform,origin:Pos2,mode:u8}
 fn points(t:&Transform,canvas:Rect)->[Pos2;4] {
@@ -69,6 +71,8 @@ impl StudioApp {
         if self.project.apply_layer_transform(id,&t) {
             self.project.remember_layer_parameters(id);
             self.transform_changed();
+            // A viewport resize changes the cover crop, not just its texture box.
+            if self.project.output.layout.enabled&&self.project.composition.as_ref().is_some_and(|comp|comp.clips.iter().any(|c|c.id==id&&c.track==crate::timeline::VIDEO)){self.request_frame();}
         }
     }
     pub(super) fn layer_canvas(&mut self,ui:&mut egui::Ui,size:Vec2) {
@@ -79,8 +83,9 @@ impl StudioApp {
         let ch=(outer.height()-24.).min((outer.width()-24.)/ratio).max(2.);
         let canvas=Rect::from_center_size(outer.center(),Vec2::new(ch*ratio,ch));
         #[cfg(test)] self.hitboxes.insert("preview_canvas".into(),canvas);
-        painter.rect_filled(canvas,0.,if self.project.output.editorial{Color32::from_rgb(244,240,230)}else{BG});
         let ms=self.timeline_view.cursor;
+        let framed=self.project.output.layout.enabled&&self.project.composition.as_ref().unwrap().clips.iter().any(|c|c.track==crate::timeline::VIDEO&&c.active(ms));
+        painter.rect_filled(canvas,0.,if framed{Color32::BLACK}else if self.project.output.editorial{Color32::from_rgb(244,240,230)}else{BG});
         let mut clips=self.project.composition.as_ref().unwrap().clips.clone();clips.sort_by_key(|c|c.z);
         for c in clips.iter().filter(|c|!c.audio()&&c.enabled(&self.project)&&c.active(ms)) {
             let t=composition::evaluated(&self.project,c,ms);
@@ -94,6 +99,7 @@ impl StudioApp {
             painter.galley(pos,text,Color32::WHITE);
         }
         let selected=self.layers.selected.clone();
+        if self.source_mask_canvas(ui,&painter,canvas,&response,&clips){painter.rect_stroke(canvas,0.,Stroke::new(1.,EDGE),egui::StrokeKind::Inside);return;}
         let mut mode=0;
         if let Some(c)=clips.iter().find(|c|Some(&c.id)==selected.as_ref()&&!c.audio()) {
             let t=composition::evaluated(&self.project,c,ms);let pts=points(&t,canvas);
@@ -124,7 +130,7 @@ impl StudioApp {
                 }
                 if response.drag_started() && !self.busy {
                     if let Some(c)=clips.iter().find(|c|Some(&c.id)==self.layers.selected.as_ref()) {
-                        if c.editable(&self.project){self.layers.drag=Some(LayerDrag{before:self.project.clone(),transform:c.transform.clone(),origin:ui.input(|i|i.pointer.press_origin()).unwrap_or(pos),mode});}
+                        if c.editable(&self.project){let mode=if self.layers.content_edit&&crate::framed_layout::footage(&self.project,c){11}else{mode};self.layers.drag=Some(LayerDrag{before:self.project.clone(),transform:c.transform.clone(),origin:ui.input(|i|i.pointer.press_origin()).unwrap_or(pos),mode});}
                     }
                 }
             }
@@ -132,6 +138,14 @@ impl StudioApp {
         if response.dragged() {
             if let (Some(drag),Some(id),Some(pos))=(&self.layers.drag,self.layers.selected.clone(),response.interact_pointer_pos()) {
                 let mut t=drag.transform.clone();let d=pos-drag.origin;
+                if drag.mode==11 {
+                    let base=drag.before.clone();
+                    if let Some(c)=clips.iter().find(|c|c.id==id) {
+                        let f=crate::framed_layout::dragged(&base,c,canvas.width()*t.width,canvas.height()*t.height,d.x,d.y);
+                        let source=self.project.segments.iter().find(|s|s.id==c.scene_id).map(|s|s.source_id.clone()).unwrap_or_default();
+                        self.write_framing(c,&source,f);
+                    }
+                }else{
                 match drag.mode {
                     3..=10 if self.project.layer_defaults.free_aspect=>{
                         let center=canvas.min+Vec2::new(t.x*canvas.width(),t.y*canvas.height());let d=pos-center;
@@ -153,6 +167,7 @@ impl StudioApp {
                     },
                 }
                 self.set_layer_transform(&id,t);
+                }
             }
         }
         if response.drag_stopped(){if let Some(drag)=self.layers.drag.take(){self.layers.managed_edit=true;self.timeline_view.history.record(drag.before);}}
@@ -187,6 +202,8 @@ impl StudioApp {
             .on_hover_text("Nhớ vị trí, kích thước, xoay, độ hiện, thứ tự, âm lượng/fade và tùy chọn đồng bộ. Bố cục Host và review được lưu riêng.");
         let Some(id)=self.layers.selected.clone() else {ui.label(RichText::new("Chọn layer trên canvas hoặc timeline.").color(MUTED));ui.separator();return;};
         let Some(c)=self.project.composition.as_ref().unwrap().clips.iter().find(|c|c.id==id).cloned() else{return;};
+        self.footage_framing_ui(ui,&c);
+        self.source_masks_layer_ui(ui,&c);
         let before=self.project.clone();let mut t=c.transform.clone();let (w,h)=self.project.output.dimensions();let (mut x,mut y)=t.pixels(w,h);
         ui.add_enabled_ui(c.editable(&self.project),|ui|{
             let sync=ui.checkbox(&mut self.project.timeline.tracks[c.track].sync_parameters,"Đồng bộ thông số với các layer cùng loại")

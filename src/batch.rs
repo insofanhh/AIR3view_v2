@@ -282,6 +282,7 @@ pub fn create(
         run_items: None,
     };
     let mut defaults = ProjectDefaults::from_project(template);
+    crate::framed_layout::pin(data,&mut defaults.output.layout)?;
     if defaults.production.is_none() {
         defaults.production = Some(ProductionSettings::from_settings(settings));
     }
@@ -833,6 +834,7 @@ fn receipt_key(p: &Project) -> String {
             &p.card_sound,
             &p.export_metadata,
             &p.music,&p.effects,
+            (p.source_masks.preferences(),crate::source_masks::identity(p)),
             crate::visual_effects::fingerprint(&p.music.file),
             p.effects.layers.values().chain(std::iter::once(&p.effects.footage)).map(|e|crate::visual_effects::fingerprint(Path::new(&e.lut))).collect::<Vec<_>>(),
         ))
@@ -1646,14 +1648,13 @@ mod tests {
             .unwrap();
         let job = KillJob::attach(&parent).unwrap();
         let start = std::time::Instant::now();
-        while !pid_path.is_file() && start.elapsed() < Duration::from_secs(10) {
+        let pid=loop {
+            if let Ok(text)=fs::read_to_string(&pid_path) {
+                if let Ok(pid)=text.trim().parse::<u32>(){break pid;}
+            }
+            assert!(start.elapsed()<Duration::from_secs(10),"Worker PID was not published");
             thread::sleep(Duration::from_millis(50));
-        }
-        let pid = fs::read_to_string(pid_path)
-            .unwrap()
-            .trim()
-            .parse::<u32>()
-            .unwrap();
+        };
         drop(job);
         parent.wait().unwrap();
         let result = process::command("powershell.exe").args(["-NoProfile", "-Command", &format!("if(Get-Process -Id {pid} -ErrorAction SilentlyContinue){{exit 1}}else{{exit 0}}")]).stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap();

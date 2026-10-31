@@ -7,6 +7,29 @@ fn main() -> Result<()> {
     let s = Settings::default();
     let cancel = process::cancel_token();
     match args.get(1).map(String::as_str) {
+        Some("mask-scan")=>{
+            let path=Path::new(args.get(2).context("mask-scan <project.json> [--force] [--refresh-evidence]")?);
+            let mut p=Project::load(path)?;
+            let settings_path=data_dir().join("settings.json");
+            let settings=if settings_path.is_file(){Settings::load(&settings_path)?}else{s};
+            reaction_studio::source_masks::scan(&mut p,&settings,&cancel,args.iter().any(|v|v=="--force"),|m|println!("{m}"))?;
+            if args.iter().any(|v|v=="--refresh-evidence") && p.evidence_settings.enabled {
+                reaction_studio::evidence::prepare(&mut p,&settings,&cancel,|m|println!("{m}"))?;
+                p.ensure_composition();
+            }
+            println!("{}",p.source_masks.report);p.save()?;
+        },
+        Some("inspect-script")=>{
+            let p=Project::load(Path::new(args.get(2).context("inspect-script <project.json> [candidate.json]")?))?;
+            let settings_path=data_dir().join("settings.json");
+            let globals=if settings_path.is_file(){Settings::load(&settings_path)?}else{s};
+            let settings=reaction_studio::workflow::effective_settings(&p,&globals);
+            let plan=if let Some(candidate)=args.get(3){serde_json::from_slice::<ScriptPlan>(&fs::read(candidate)?)?}
+                else{reaction_studio::script_quality::plan(&p)};
+            let report=reaction_studio::script_quality::inspect(&p,&plan,&settings,false);
+            println!("{}",serde_json::to_string_pretty(&serde_json::json!({"local_only":true,"report":report}))?);
+            anyhow::ensure!(report.issues.is_empty(),"Kiểm tra cục bộ còn lỗi; chưa gọi AI đối chiếu nguồn");
+        },
         Some("refresh-sfx-library")=>{
             let root=data_dir().join("projects");let mut projects=0;let mut sounds=0;
             for path in reaction_studio::project_store::list(&root) {
@@ -91,6 +114,8 @@ fn main() -> Result<()> {
                     reaction_studio::workflow::run(project,settings,tx,cancel,args[1]=="auto-resume")
                 } else if args[1] == "script-only" {
                     let mut project=project;
+                    project.script_pipeline=reaction_studio::grounded_script::VERSION.into();
+                    project.script_presentation=if reaction_studio::footage_first::enabled(&project,&settings){reaction_studio::footage_first::VERSION.into()}else{String::new()};
                     let plan=reaction_studio::providers::analyze(&project,&settings,&cancel)?;
                     pipeline::apply_plan(&mut project,plan)?;
                     project.validate(true)?;project.check_duration()?;project.save()?;

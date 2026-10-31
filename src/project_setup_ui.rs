@@ -322,7 +322,9 @@ impl StudioApp {
                 "16:9"
             },
             self.project.output.resolution,
-            if self.project.output.blur_background {
+            if self.project.output.layout.enabled {
+                "video trên / ảnh dưới"
+            } else if self.project.output.blur_background {
                 "nền video mờ"
             } else {
                 "nền theo mẫu"
@@ -336,6 +338,7 @@ impl StudioApp {
             |ui| {
                 self.output_settings(ui);
                 self.footage_effects_ui(ui);
+                self.source_masks_settings_ui(ui);
                 let _evidence=egui::CollapsingHeader::new("Dẫn chứng cho host").id_salt("output_evidence").show(ui,|ui|self.evidence_settings_controls(ui));
                 #[cfg(test)] self.hitboxes.insert("output_evidence_header".into(),_evidence.header_response.rect);
             },
@@ -482,6 +485,9 @@ impl StudioApp {
                 });
                 settings_group(ui, "production_avatar", "Nhân vật review / reaction", false, |ui| {
                 ui.checkbox(&mut p.avatar_enabled, "Tạo nhân vật review / reaction");
+                if !p.avatar_enabled {
+                    muted(ui, "Khi tạo kịch bản: một Host mở đầu 5–8 giây; phần còn lại dùng highlight nguồn và lời bình. Voice giữ nguyên tốc độ. Cảnh đã khóa được giữ nguyên.");
+                }
                 ui.add_enabled_ui(p.avatar_enabled, |ui| {
                     egui::ComboBox::from_id_salt("project_avatar_provider")
                         .width(ui.available_width() - 4.)
@@ -656,7 +662,7 @@ impl StudioApp {
             if self.settings.provider=="antigravity" && ui.small_button("Thử đọc URL trực tiếp lại ở lần chạy tới").clicked() {
                 let _=std::fs::remove_file(self.project.root.join("analysis/url/capability.json"));
             }
-            muted(ui,if self.settings.provider=="antigravity"{"Antigravity: thử URL song song tải; tự động dùng transcript + ảnh nếu URL không đọc được."}else{"Gemini API: phân tích URL song song với tải video."});
+            muted(ui,"Tải nguồn → transcript + ảnh → trích sự kiện → viết kịch bản → tạo giọng và timeline.");
         });
     }
     fn setup_run_bar(&mut self, ui: &mut egui::Ui) {

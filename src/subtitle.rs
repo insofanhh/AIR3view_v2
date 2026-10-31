@@ -113,12 +113,21 @@ pub fn write(p: &Project, folder: &Path) -> Result<()> {
             if !st.karaoke {
                 formatted = format!("{{\\c{}}}{formatted}", color(st.color));
             }
-            if st.offset_x!=0 || st.offset_y!=0 {
+            let mut margin_l=0;let mut margin_r=0;
+            if let Some(t)=crate::framed_layout::caption_box(p,&seg) {
+                let left=(t.x-t.width/2.)*w as f32;let right=(t.x+t.width/2.)*w as f32;
+                let top=(t.y-t.height/2.)*h as f32;let bottom=(t.y+t.height/2.)*h as f32;
+                let x=t.x*w as f32+st.offset_x as f32;
+                let floor=(top+st.size).min(bottom-4.);
+                let y=(bottom-st.bottom_margin as f32+st.offset_y as f32).clamp(floor,bottom-4.);
+                margin_l=(left+12.).max(0.) as u32;margin_r=(w as f32-right+12.).max(0.) as u32;
+                formatted=format!("{{\\an2\\pos({x:.1},{y:.1})\\clip({left:.0},{top:.0},{right:.0},{bottom:.0})}}{formatted}");
+            }else if st.offset_x!=0 || st.offset_y!=0 {
                 let [x,y]=anchor(st,w,h);
                 formatted=format!("{{\\an2\\pos({x:.1},{y:.1})}}{formatted}");
             }
             ass.push_str(&format!(
-                "Dialogue: 0,{},{},Default,,0,0,0,,{}\n",
+                "Dialogue: 0,{},{},Default,,{margin_l},{margin_r},0,,{}\n",
                 ass_time(start),
                 ass_time(end),
                 formatted

@@ -74,6 +74,7 @@ impl Selection {
             "accepted" => "Đã đối chiếu ảnh",
             "repaired" => "Đã tự chọn lại ảnh",
             "manual_override" => "Giữ theo lựa chọn thủ công",
+            "source_bound" => "Ảnh theo sự kiện nguồn · kiểm tra local",
             "text_only" => "Trích dẫn đã đối chiếu · thẻ chữ",
             "needs_review" => "Cần kiểm tra dẫn chứng",
             "omitted" => "Đã bỏ ảnh không phù hợp",
@@ -84,7 +85,7 @@ impl Selection {
         self.version == VERSION
             && matches!(
                 self.status.as_str(),
-                "accepted" | "repaired" | "text_only" | "manual_override"
+                "accepted" | "repaired" | "text_only" | "manual_override" | "source_bound"
             )
     }
 }
@@ -785,6 +786,7 @@ pub fn prepare(
     cancel: &Cancel,
     mut progress: impl FnMut(&str),
 ) -> Result<()> {
+    crate::grounded_script::prepare_photos(p,s,cancel)?;
     prepare_with(p, s, cancel, &mut progress, review)
 }
 fn prepare_with<R>(
@@ -1052,7 +1054,7 @@ pub fn invalidate(p: &mut Project, id: Option<&str>) {
             }
             if item.enabled || item.selection.version == VERSION {
                 item.enabled = true;
-                item.selection.status = "pending".into();
+                item.selection.status = if p.script_pipeline==crate::grounded_script::VERSION {"recheck_requested"}else{"pending"}.into();
                 item.selection.key.clear();
             }
         }

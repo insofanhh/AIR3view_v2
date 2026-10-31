@@ -97,7 +97,8 @@ impl LayerClip {
     }
     pub fn still(&self)->bool {self.media.as_ref().and_then(|p|p.extension()).is_some_and(|e|e.eq_ignore_ascii_case("png")||e.eq_ignore_ascii_case("jpg")||e.eq_ignore_ascii_case("jpeg"))}
     pub fn enabled(&self,p:&Project)->bool {
-        self.visible && !p.timeline.tracks[self.track].muted && (!self.background_original(p)||p.output.original_audio_enabled) && (self.track!=timeline::SFX || {
+        self.visible && !(p.output.layout.enabled&&self.track==timeline::AVATAR&&p.segments.iter().any(|s|s.id==self.scene_id&&s.kind!="host"))
+        && !p.timeline.tracks[self.track].muted && (!self.background_original(p)||p.output.original_audio_enabled) && (self.track!=timeline::SFX || {
             let (parent,on)=if self.evidence_id.is_some(){(timeline::EVIDENCE,p.evidence_settings.enabled&&p.evidence_settings.sound_enabled)}else{(timeline::GRAPHICS,p.card_sound.enabled)};
             on && !p.timeline.tracks[parent].muted && p.composition.as_ref().is_none_or(|comp|comp.clips.iter().any(|c|c.track==parent&&c.group==self.group&&c.visible))
         })
@@ -110,10 +111,17 @@ impl LayerClip {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Composition { pub version:u32, pub script_key:String, pub clips:Vec<LayerClip>, #[serde(default)] pub removed:Vec<String> }
 impl Composition {
+    fn prune_empty_avatar(&mut self,p:&Project)->bool {
+        if p.script_presentation!=crate::footage_first::VERSION {return false;}
+        let before=self.clips.len();
+        self.clips.retain(|c|!c.linked||c.track!=timeline::AVATAR||c.media.is_some());
+        self.clips.len()!=before
+    }
     pub fn duration_ms(&self)->u64 { self.clips.iter().map(LayerClip::end).max().unwrap_or(0) }
     pub fn key(p:&Project)->String {
         // Transforms are intentionally absent; adjusting them never rebuilds assets.
-        media::hash(serde_json::to_vec(&("evidence-persistent-stack-whoosh-v5",&p.segments,&p.evidence_settings,&p.card_sound.style)).unwrap_or_default())
+        let base=media::hash(serde_json::to_vec(&("evidence-persistent-stack-whoosh-v5",&p.segments,&p.evidence_settings,&p.card_sound.style,&p.output.layout)).unwrap_or_default());
+        if p.script_presentation==crate::footage_first::VERSION {media::hash(format!("{base}:footage-first-context-v1"))}else{base}
     }
     pub fn from_project(p:&Project)->Self {
         let (w,h)=p.output.dimensions(); let (w,h)=(w as f32,h as f32);
@@ -122,13 +130,14 @@ impl Composition {
         for s in &p.segments {
             let src=p.source(&s.source_id).ok();
             for track in [BACKGROUND,timeline::VIDEO,timeline::AVATAR,timeline::VOICE,timeline::ORIGINAL,timeline::CAPTIONS,timeline::GRAPHICS] {
-                if track==BACKGROUND { if s.kind=="host" {if !p.evidence_settings.enabled||!s.evidence_items.iter().any(|e|e.enabled&&e.asset.is_some()){continue;}} else if !p.output.blur_background {continue;} }
+                if track==BACKGROUND { if s.kind=="host" {if crate::footage_first::context_path(p,s).is_none()&&(!p.evidence_settings.enabled||!s.evidence_items.iter().any(|e|e.enabled&&e.asset.is_some())){continue;}} else if !p.output.blur_background {continue;} }
                 else if !timeline::has_track(s,track) {continue;}
+                if track==timeline::AVATAR&&s.avatar.is_none()&&p.script_presentation==crate::footage_first::VERSION {continue;}
                 if track==timeline::CAPTIONS && (!p.subtitles.enabled || s.suppress_captions) {continue;}
                 let mut transform=Transform::default();
                 let (media,proxy,media_in_ms)=match track {
                     BACKGROUND | timeline::VIDEO | timeline::ORIGINAL => {
-                        if track==BACKGROUND&&s.kind=="host" { (Some(crate::evidence::background_path(p,s)),None,0) } else {
+                        if track==BACKGROUND&&s.kind=="host" { (Some(crate::footage_first::context_path(p,s).unwrap_or_else(||crate::evidence::background_path(p,s))),None,0) } else {
                         let Some(src)=src else {continue;};
                         if track==timeline::ORIGINAL && !src.has_audio {continue;}
                         if track==timeline::VIDEO {
@@ -222,6 +231,10 @@ impl Composition {
         }
         result.clips=expanded;
         if let Some(music)=crate::background_music::clip(p){result.clips.push(music);}
+        // Build every layout-owned layer before restoring portable user edits.
+        // Otherwise the viewport overwrites video placement and new backgrounds
+        // never receive their remembered geometry.
+        crate::framed_layout::apply(p,&mut result.clips);
         p.layer_defaults.apply(p, &mut result);
         if !p.layer_defaults.free_aspect {for c in result.clips.iter_mut().filter(|c|matches!(c.track,timeline::AVATAR|timeline::EVIDENCE|timeline::ANNOTATION)) {
             if c.track==timeline::AVATAR {
@@ -376,12 +389,12 @@ impl Project {
         self.composition.as_mut().unwrap().timing(id,start,trim,duration)
     }
     pub fn composition_snapshot(&self)->Composition {
-        if let Some(c)=&self.composition { if c.version==4&&c.script_key==Composition::key(self) {let mut c=c.clone();c.upgrade_host_aspect(self);crate::evidence_sfx::refresh_composition(self,&mut c);Self::sync_music(&mut c,crate::background_music::clip(self));return c;} }
+        if let Some(c)=&self.composition { if c.version==4&&c.script_key==Composition::key(self) {let mut c=c.clone();c.upgrade_host_aspect(self);c.prune_empty_avatar(self);crate::evidence_sfx::refresh_composition(self,&mut c);Self::sync_music(&mut c,crate::background_music::clip(self));return c;} }
         Composition::from_project(self)
     }
     pub fn ensure_composition(&mut self) {
         if let Some(mut c)=self.composition.take() {
-            if c.upgrade_host_aspect(self) {self.rendered=None;}
+            if c.upgrade_host_aspect(self)|c.prune_empty_avatar(self) {self.rendered=None;}
             self.composition=Some(c);
         }
         if self.composition.as_ref().is_none_or(|c|c.version<4||c.script_key!=Composition::key(self)) {
@@ -436,7 +449,7 @@ impl Project {
                     if !automatic_sound && !prior.linked && (prior.evidence_id.is_none()||prior.timing_manual) {c.start_ms=prior.start_ms;c.duration_ms=prior.duration_ms;c.media_in_ms=prior.media_in_ms;c.cue_in_ms=prior.cue_in_ms;c.playback_rate=prior.playback_rate;}
                 } }
                 for clip in old.clips.iter().filter(|c|!c.linked) {
-                    if !new.clips.iter().any(|c|c.id==clip.id) && !clip.id.contains(":gfx:") && (clip.evidence_id.is_none()||!clip.id.contains(":ev:")) && self.segments.iter().any(|s|s.id==clip.scene_id&&clip.evidence_id.as_ref().is_none_or(|id|self.evidence_settings.enabled&&s.evidence_items.iter().any(|e|&e.id==id&&e.enabled&&(clip.track!=timeline::ANNOTATION||e.annotation_asset.is_some())))) {new.clips.push(clip.clone());}
+                    if !new.clips.iter().any(|c|c.id==clip.id) && !clip.id.ends_with(":layout-background") && !crate::framed_layout::overlay(clip) && !clip.id.contains(":gfx:") && (clip.evidence_id.is_none()||!clip.id.contains(":ev:")) && self.segments.iter().any(|s|s.id==clip.scene_id&&clip.evidence_id.as_ref().is_none_or(|id|self.evidence_settings.enabled&&s.evidence_items.iter().any(|e|&e.id==id&&e.enabled&&(clip.track!=timeline::ANNOTATION||e.annotation_asset.is_some())))) {new.clips.push(clip.clone());}
                 }
                 new.removed=old.removed.clone();new.clips.retain(|c|!new.removed.contains(&c.id));
             }
@@ -448,6 +461,7 @@ impl Project {
         let media:Vec<_>=self.composition.as_ref().into_iter().flat_map(|c|c.clips.iter()).filter_map(|c|{
             if c.track==timeline::SFX{return None;}
             let s=self.segments.iter().find(|s|s.id==c.scene_id)?;
+            if c.track==BACKGROUND&&s.kind=="host"&&c.media.as_ref().is_some_and(|m|m.parent().is_some_and(|v|v.ends_with("assets/host-context"))){if let Some(path)=crate::footage_first::context_path(self,s){return Some((c.id.clone(),path));}}
             if c.track==BACKGROUND&&s.kind=="host"&&c.media.as_ref().is_some_and(|m|crate::evidence::generated_background(m)){return Some((c.id.clone(),crate::evidence::background_path(self,s)));}
             let id=c.evidence_id.as_ref()?;let e=s.evidence_items.iter().find(|e|&e.id==id)?;
             let asset=if c.track==timeline::ANNOTATION{e.annotation_asset.as_ref()}else{e.asset.as_ref()}?;

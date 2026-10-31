@@ -695,7 +695,7 @@ pub fn prepare(
             let source = p.source(&item.source_id)?;
             let raw = if item.selection.text_only {None}else{Some(source_frame(p, s, source, item.source_time_ms, cancel)?)};
             let effective=effective_crop(item.crop,p.evidence_settings.crop_percent)?;
-            let first = if let Some(raw)=&raw{crop_image(&image::open(raw)?.to_rgba8(), effective)}else{RgbaImage::new(1,1)};
+            let first = if let Some(raw)=&raw{let mut img=image::open(raw)?.to_rgba8();crate::source_masks::mask_image(p,&item.source_id,item.source_time_ms,&mut img);crop_image(&img, effective)}else{RgbaImage::new(1,1)};
             let second = if item.kind == "comparison" {
                 let source = p.source(if item.second_source_id.is_empty() {
                     &item.source_id
@@ -703,7 +703,8 @@ pub fn prepare(
                     &item.second_source_id
                 })?;
                 let raw = source_frame(p, s, source, item.second_time_ms.unwrap(), cancel)?;
-                Some(crop_image(&image::open(raw)?.to_rgba8(), effective_crop(item.second_crop,p.evidence_settings.crop_percent)?))
+                let mut img=image::open(raw)?.to_rgba8();crate::source_masks::mask_image(p,&source.id,item.second_time_ms.unwrap(),&mut img);
+                Some(crop_image(&img, effective_crop(item.second_crop,p.evidence_settings.crop_percent)?))
             } else {
                 None
             };
@@ -752,6 +753,7 @@ pub fn prepare(
                     },
                     p.evidence_settings.crop_percent,
                     "evidence-card-v10-verified-photo-or-quote",
+                    crate::source_masks::identity(p),
                     item.selection.text_only,
                     &p.rules.language,
                 ))
@@ -785,6 +787,7 @@ pub fn prepare(
     write_json(&p.root.join("assets/evidence/sources.json"), &records)?;
     prepare_backgrounds(p, s, cancel)?;
     align(p);
+    p.source_masks.evidence_revision=crate::source_masks::evidence_key(p);
     Ok(())
 }
 /// Gate completion on the final script, not the worker's earlier snapshot.

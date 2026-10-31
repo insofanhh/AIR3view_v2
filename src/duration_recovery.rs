@@ -74,6 +74,7 @@ impl Recovery {
         Ok(Some(state.auto_attempts))
     }
     pub fn reserve_ai(p: &Project, s: &Settings) -> Result<Option<u8>> {
+        if crate::grounded_script::enabled(p)&&!crate::grounded_script::repair_available(p,s)? {return Ok(None);}
         let mut state = Self::load(p, s)?;
         if state.ai_attempts >= MAX_AI_REPAIRS { return Ok(None); }
         state.ai_attempts += 1; state.save(p)?;
@@ -89,6 +90,7 @@ impl Recovery {
     /// A deliberate UI/CLI Retry starts a new bounded cycle. Resume after a
     /// crash and the internal automatic loop must never call this method.
     pub fn manual_retry(root: &Path) -> Result<()> {
+        crate::grounded_script::manual_retry(root)?;
         let path=root.join("duration-recovery.json");
         if !path.exists() && !path.with_extension("json.bak").exists() { return Ok(()); }
         let old=read(&path)?;
@@ -120,6 +122,7 @@ pub fn extend_short_source(p: &mut Project) -> Result<bool> {
         if p.rules.intercuts_enabled && duration > p.rules.intercut_max_seconds * 1000 { continue; }
         let out_ms = seg.in_ms + crate::footage_speed::scaled(duration, seg.source_rate);
         if out_ms > p.source(&seg.source_id)?.duration_ms { continue; }
+        if crate::grounded_script::source_bounds(p,seg).is_some_and(|(start,end)|seg.in_ms<start||out_ms>end){continue;}
         if p.rules.excluded_ranges.iter().any(|r| r.source_id == seg.source_id && r.start_ms < out_ms && r.end_ms > seg.in_ms) { continue; }
         let mut next = p.clone(); next.composition = None;
         next.segments[i].duration_ms = duration; next.segments[i].out_ms = out_ms;

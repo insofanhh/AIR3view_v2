@@ -3,7 +3,7 @@ use anyhow::Result;
 use std::{fs, path::Path};
 use eframe::egui::{self, Color32, FontData, FontDefinitions, FontId};
 
-fn metrics_context(font: &str) -> egui::Context {
+pub(crate) fn metrics_context(font: &str) -> egui::Context {
     let ctx = egui::Context::default();
     let path = if font.to_lowercase().contains("arial") {
         "C:/Windows/Fonts/arialbd.ttf"
@@ -18,7 +18,7 @@ fn metrics_context(font: &str) -> egui::Context {
     ctx
 }
 
-fn fit_text(ctx: &egui::Context, text: &str, max_size: f64, width: f64, height: f64) -> (String, f64) {
+pub(crate) fn fit_text(ctx: &egui::Context, text: &str, max_size: f64, width: f64, height: f64) -> (String, f64) {
     let text = text.lines().map(subtitle::safe).collect::<Vec<_>>().join("\n");
     let mut size = max_size;
     loop {

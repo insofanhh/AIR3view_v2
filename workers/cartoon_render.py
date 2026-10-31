@@ -28,7 +28,7 @@ def panda_base():
         return canvas
 
 
-def panda_frame(t, cues, emotion, size, gestures):
+def panda_frame(t, cues, size, gestures):
     head = panda_base().copy()
     draw = ImageDraw.Draw(head)
     shape, (mw, mh) = mouth_at(cues, t)
@@ -44,8 +44,6 @@ def panda_frame(t, cues, emotion, size, gestures):
         if shape in ["C", "D", "H"]:
             draw.ellipse((x-mw*.5, y+mh*.4, x+mw*.5, y+mh*.85), fill="#CD7581")
     angle = math.sin(t*2.4)*.9
-    if emotion == "surprised":
-        angle += math.sin(t*8)*1.8*max(0, 1-t/.6)
     head = head.rotate(angle, Image.Resampling.BICUBIC, center=(256, 242),
                        expand=False, fillcolor=(0, 0, 0, 0))
     # Keep the existing shoulder/face rig at its original scale; extend the
@@ -84,7 +82,7 @@ def portrait_base():
         return canvas
 
 
-def portrait_frame(t, cues, emotion, size, gestures):
+def portrait_frame(t, cues, size, gestures):
     image = portrait_base().copy()
     draw = ImageDraw.Draw(image)
     shape, (mw, mh) = mouth_at(cues, t)
@@ -100,10 +98,8 @@ def portrait_frame(t, cues, emotion, size, gestures):
             draw.rounded_rectangle((x-mw+9, y-mh*.5+4, x+mw-9, y-mh*.5+11), 3, fill="#FFFCFA")
         if shape in ["C", "D", "H"]:
             draw.ellipse((x-mw*.55, y+mh*.4, x+mw*.55, y+mh*.85), fill="#CD7581")
-    # Gentle nod and a short surprised tilt without repainting the reference eyes.
+    # Gentle nod without repainting the reference eyes.
     angle = math.sin(t*2.4)*.65
-    if emotion == "surprised":
-        angle += math.sin(t*8)*1.6*max(0, 1-t/.6)
     # Face identity/visemes stay in source coordinates; only the head nods.
     image = image.resize((338, 338), Image.Resampling.LANCZOS)
     head = Image.new("RGBA", (512, 512))
@@ -115,16 +111,6 @@ def portrait_frame(t, cues, emotion, size, gestures):
     moved.alpha_composite(head, (0, round(math.sin(t*3))))
     return moved if size == 512 else moved.resize((size, size), Image.Resampling.LANCZOS)
 
-
-def emotion_kind(text):
-    text = text.lower()
-    if any(x in text for x in ["shock", "surpris", "bất ngờ", "sốc", "giật", "kinh ngạc"]):
-        return "surprised"
-    if any(x in text for x in ["sad", "concerned", "tense", "somber", "sombre", "đồng cảm", "buồn", "trầm", "lo lắng"]):
-        return "concerned"
-    if any(x in text for x in ["serious", "nghiêm", "phân tích", "tỉnh táo"]):
-        return "serious"
-    return "curious"
 
 
 def mouth_at(cues, t):
@@ -139,21 +125,21 @@ def mouth_at(cues, t):
     return shape, (a[0]+(b[0]-a[0])*mix, a[1]+(b[1]-a[1])*mix)
 
 
-def frame(t, cues, emotion="curious", character="studio", size=512, gestures=None):
+def frame(t, cues, character="studio", size=512, gestures=None):
     """Draw at a fixed logical scale. No randomness; arbitrary timestamp is seek safe."""
     if gestures is None:
-        gestures = plan_gestures("Lời bình giải thích tình huống", [], cues, emotion, "auto", max((c["end"] for c in cues), default=1))
+        gestures = plan_gestures("Lời bình giải thích tình huống", [], cues, "auto", max((c["end"] for c in cues), default=1))
     if character == "portrait":
-        return portrait_frame(t, cues, emotion, size, gestures)
+        return portrait_frame(t, cues, size, gestures)
     if character == "panda":
-        return panda_frame(t, cues, emotion, size, gestures)
+        return panda_frame(t, cues, size, gestures)
     image = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
     d = ImageDraw.Draw(image)
     ink = "#172235"
     skin = "#F1B78F"
     shirt = "#536EF6" if character == "studio" else "#287C88"
     bob = 2.8 * math.sin(t * 2.4)
-    lean = 3 * math.sin(t * 1.7) + (5 * math.sin(t*18) * math.exp(-t*2) if emotion == "surprised" else 0)
+    lean = 3 * math.sin(t * 1.7)
     def ellipse(box, fill, outline=None, width=1):
         d.ellipse(tuple(round(v) for v in box), fill=fill, outline=outline, width=width)
     def line(points, fill=ink, width=5):
@@ -173,17 +159,17 @@ def frame(t, cues, emotion="curious", character="studio", size=512, gestures=Non
         d.rounded_rectangle((x-14,hy-30,x+14,hy+44), 13, fill="#283951", outline="#7185A5", width=4)
     line([(hx+103,hy+28),(hx+99,hy+75),(hx+51,hy+83)], "#283951", 6)
     ellipse((hx+41,hy+76,hx+58,hy+89), ink)
-    # Eyes/blink, eyebrows and facial emotion.
+    # Neutral eyes/eyebrows with natural blinking.
     blink = (t % 4.1 < .105 and t > .1)
-    eye_h = 2 if blink else (20 if emotion == "surprised" else 14)
+    eye_h = 2 if blink else 14
     for side in [-1, 1]:
         x = hx + side*39
         ellipse((x-22,hy-21-eye_h/2,x+22,hy-21+eye_h), "#FFFFFF", ink, 3)
         if not blink:
             ellipse((x-7,hy-23,x+7,hy-9), ink)
             ellipse((x-3,hy-22,x+1,hy-18), "#FFFFFF")
-        brow_y = hy-58 if emotion == "surprised" else hy-46
-        slope = side*8 if emotion == "concerned" else (-side*7 if emotion == "serious" else 0)
+        brow_y = hy-46
+        slope = 0
         line([(x-20,brow_y+slope),(x+18,brow_y-slope)], ink, 7)
         if character == "analyst":
             d.rounded_rectangle((x-29,hy-43,x+29,hy+5), 10, outline=ink, width=5)
@@ -221,11 +207,10 @@ def render(job):
     # Inherit stderr so the Rust process runner can drain it and kill the whole process tree.
     proc = subprocess.Popen(command, stdin=subprocess.PIPE, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
-        kind = emotion_kind(job.get("emotion", ""))
         gestures = plan_gestures(job.get("narration", ""), job.get("words", []), cues,
-                                 kind, job.get("gesture", "auto"), duration)
+                                 job.get("gesture", "auto"), duration)
         for index in range(math.ceil(duration*fps)):
-            proc.stdin.write(frame(index/fps, cues, kind, job.get("character", "studio"), size, gestures).tobytes())
+            proc.stdin.write(frame(index/fps, cues, job.get("character", "studio"), size, gestures).tobytes())
         proc.stdin.close()
         if proc.wait() != 0:
             raise RuntimeError("FFmpeg cartoon encode failed")

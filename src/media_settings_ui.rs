@@ -13,7 +13,7 @@ fn effect_fields(ui:&mut egui::Ui,e:&mut Effect)->bool {
 }
 
 impl StudioApp {
-    fn media_settings_changed(&mut self){self.dirty=true;self.project.rendered=None;self.project.ensure_composition();self.player.stop();self.layers.textures.clear();self.request_frame();}
+    pub(super) fn media_settings_changed(&mut self){self.dirty=true;self.project.rendered=None;self.project.ensure_composition();self.player.stop();self.layers.textures.clear();self.request_frame();}
     pub(super) fn footage_effects_ui(&mut self,ui:&mut egui::Ui){
         let focus=std::env::args().any(|v|v=="--capture-media=effects");
         let response=egui::CollapsingHeader::new("Màu sắc & lật footage").id_salt("footage_effects").default_open(focus).show(ui,|ui|{

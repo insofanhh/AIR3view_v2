@@ -13,6 +13,12 @@ use std::{
 };
 
 pub type Cancel = Arc<AtomicBool>;
+#[derive(Debug)]
+pub struct Timeout { pub seconds: u64 }
+impl std::fmt::Display for Timeout {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result {write!(f,"vượt thời gian chờ {}s",self.seconds)}
+}
+impl std::error::Error for Timeout {}
 pub fn cancel_token() -> Cancel {
     Arc::new(AtomicBool::new(false))
 }
@@ -153,7 +159,7 @@ fn run_inner(
     let mut result_at=None;
     let mut finished_by_result=false;
     let status = loop {
-        if cancel.load(Ordering::Relaxed) || start.elapsed() > timeout {
+        if cancel.load(Ordering::Relaxed) || (start.elapsed() > timeout && !completed.load(Ordering::Acquire)) {
             stop(&mut child);
             interrupted = true;
             break None;
@@ -163,7 +169,7 @@ fn run_inner(
         }
         if completed.load(Ordering::Acquire) {
             let at=result_at.get_or_insert_with(Instant::now);
-            if at.elapsed()>=Duration::from_secs(2) {
+            if at.elapsed()>=Duration::from_secs(2) || start.elapsed()>timeout {
                 stop(&mut child);finished_by_result=true;break None;
             }
         }
@@ -176,7 +182,7 @@ fn run_inner(
     let stderr = err.join().unwrap_or_default();
     if interrupted {
         check_cancel(cancel)?;
-        bail!("{program} vượt thời gian chờ {}s", timeout.as_secs());
+        return Err(anyhow::Error::new(Timeout{seconds:timeout.as_secs()}).context(program.to_owned()));
     }
     if !finished_by_result && !status.context("Không có exit status")?.success() {
         let details = String::from_utf8_lossy(&stderr);
@@ -211,4 +217,27 @@ pub fn version(program: &str) -> String {
 }
 pub fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|s| s.to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn terminal_json_before_deadline_survives_a_hanging_cli_shutdown() {
+        let node=Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/node.exe");
+        if !cfg!(windows) {return;}
+        let output=run_json_result(&node.to_string_lossy(),&args(&["-e",
+            "process.stdout.write(JSON.stringify({event:'result',result:{status:'SUCCESS',output:{verified:true}}})+'\\n');setInterval(()=>{},1000)"]),
+            None,&cancel_token(),Duration::from_millis(1200),None).unwrap();
+        let value:serde_json::Value=serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["result"]["output"]["verified"],true);
+    }
+    #[test]
+    fn a_live_cli_without_a_terminal_result_returns_a_typed_timeout() {
+        let node=Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/node.exe");
+        if !cfg!(windows) {return;}
+        let error=run_json_result(&node.to_string_lossy(),&args(&["-e","setInterval(()=>{},1000)"]),
+            None,&cancel_token(),Duration::from_millis(300),None).unwrap_err();
+        assert!(error.downcast_ref::<Timeout>().is_some());
+    }
 }

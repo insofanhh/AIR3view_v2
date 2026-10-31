@@ -24,7 +24,7 @@ pub struct Settings {
     pub cli_path: String,
     pub cli_args: Vec<String>,
     pub cli_model: String,
-    /// auto: attempt URL concurrently, fall back to local evidence. url: strict.
+    /// Legacy serialized preference. New analysis always uses downloaded evidence.
     pub analysis_input: String,
     pub visual_sample_seconds: u32,
     pub asr_model: String,
@@ -77,7 +77,7 @@ impl Default for Settings {
                 "{schema}".into(),
             ],
             cli_model: "gemini-3.8-flash-medium".into(),
-            analysis_input: "auto".into(),
+            analysis_input: "local".into(),
             visual_sample_seconds: 3,
             asr_model: "large-v3-turbo".into(),
             asr_device: "cpu".into(),
@@ -220,6 +220,7 @@ pub fn worker_path(name: &str) -> PathBuf {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct OutputSettings {
+    pub layout: crate::framed_layout::Settings,
     pub footage_speed: crate::footage_speed::Settings,
     pub editorial: bool,
     pub blur_background: bool,
@@ -241,6 +242,7 @@ impl Default for OutputSettings {
     fn default() -> Self {
         Self {
             footage_speed: Default::default(),
+            layout: Default::default(),
             editorial: false,
             blur_background: false,
             original_audio_enabled: false,
@@ -469,7 +471,6 @@ pub struct Segment {
     pub footage_status: String,
     pub narration: String,
     pub caption: String,
-    pub emotion: String,
     pub gesture: String,
     pub motion: String,
     pub avatar_size: String,
@@ -509,7 +510,6 @@ impl Default for Segment {
             footage_status: String::new(),
             narration: String::new(),
             caption: String::new(),
-            emotion: "Tự nhiên".into(),
             gesture: "auto".into(),
             motion: "none".into(),
             avatar_size: "small".into(),
@@ -560,6 +560,7 @@ pub struct ScriptPlan {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct Project {
+    pub source_masks: crate::source_masks::Settings,
     pub music: crate::background_music::Settings,
     pub effects: crate::visual_effects::Settings,
     pub normalization: crate::source_normalization::Settings,
@@ -568,6 +569,9 @@ pub struct Project {
     pub title: String,
     pub analysis_summary: String,
     pub script_warnings: Vec<String>,
+    pub script_presentation: String,
+    /// Set only when creating a new script; opening old timelines does not rewrite them.
+    pub script_pipeline: String,
     pub root: PathBuf,
     pub rules: ScriptRules,
     pub output: OutputSettings,
@@ -628,6 +632,7 @@ impl ProductionSettings {
 #[derive(Clone, Default, Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct ProjectDefaults {
+    pub source_masks: crate::source_masks::Settings,
     pub timeline: Option<crate::timeline::TimelineSettings>,
     pub music: crate::background_music::Settings,
     pub effects: crate::visual_effects::Settings,
@@ -648,11 +653,15 @@ impl ProjectDefaults {
         rules.required_ranges.clear();
         rules.excluded_ranges.clear();
         let export_metadata=crate::export_metadata::MetadataSettings{title:String::new(),creation_time:String::new(),..p.export_metadata.clone()};
+        let mut output=p.output.clone();output.layout.sources.clear();output.layout.scenes.clear();
         let mut effects=p.effects.clone();effects.layers.clear();
         let mut timeline=p.timeline.clone();for track in &mut timeline.tracks{track.locked=false;}
-        Self { timeline:Some(timeline),music:p.music.clone(),effects,normalization:p.normalization.clone(),layer_defaults: crate::layer_defaults::LayerDefaults::from_project(p), rules, output: p.output.clone(), subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),card_sound:p.card_sound.clone(),export_metadata }
+        Self { source_masks:p.source_masks.preferences(),timeline:Some(timeline),music:p.music.clone(),effects,normalization:p.normalization.clone(),layer_defaults: crate::layer_defaults::LayerDefaults::from_project(p), rules, output, subtitles: p.subtitles.clone(), production:p.production.clone(), evidence_settings:p.evidence_settings.clone(),card_sound:p.card_sound.clone(),export_metadata }
     }
     pub fn apply(&self, p: &mut Project) {
+        // Preferences travel; detections and manual source coordinates do not.
+        let old=&p.source_masks;
+        p.source_masks=crate::source_masks::Settings{regions:old.regions.clone(),ignored:old.ignored.clone(),evidence_revision:old.evidence_revision.clone(),scan_key:String::new(),report:String::new(),..self.source_masks.preferences()};
         if let Some(timeline)=&self.timeline {
             let locks:Vec<_>=p.timeline.tracks.iter().map(|t|t.locked).collect();
             p.timeline=timeline.clone();
@@ -692,12 +701,15 @@ impl ProjectDefaults {
 impl Default for Project {
     fn default() -> Self {
         Self {
+            source_masks:Default::default(),
             version: 1,
             music:Default::default(),effects:Default::default(),normalization:Default::default(),
             id: Uuid::new_v4().to_string(),
             title: "Dự án mới".into(),
             analysis_summary: String::new(),
             script_warnings: vec![],
+            script_presentation: String::new(),
+            script_pipeline: String::new(),
             root: PathBuf::new(),
             rules: ScriptRules::default(),
             output: OutputSettings::default(),
@@ -795,6 +807,8 @@ impl Project {
         Ok(p)
     }
     pub fn validate_configuration(&self) -> Result<()> {
+        self.source_masks.validate()?;
+        self.output.layout.validate()?;
         self.music.validate()?;self.effects.footage.validate()?;
         for e in self.effects.layers.values(){e.validate()?;}
         self.normalization.validate()?;
@@ -1103,6 +1117,7 @@ pub fn fit_review_footage(p: &mut Project) -> Result<Vec<FootageAdjustment>> {
         let source = p.source(&seg.source_id)?;
         let mut left = 0;
         let mut right = source.duration_ms;
+        if let Some((start,end))=crate::grounded_script::source_bounds(p,seg){left=start;right=end;}
         for excluded in &p.rules.excluded_ranges {
             if excluded.source_id != seg.source_id {
                 continue;

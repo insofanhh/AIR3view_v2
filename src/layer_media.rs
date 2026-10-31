@@ -11,6 +11,7 @@ fn visual_output(p:&Project)->OutputSettings {
     output.original_audio_enabled=false;
     output.original_audio_gain=0.15;
     output.footage_speed=Default::default();
+    if output.layout.enabled&&output.layout.title_enabled&&output.layout.title.trim().is_empty(){output.layout.title=p.title.clone();}
     output
 }
 
@@ -42,11 +43,14 @@ fn intervals(p:&Project,c:&Composition,end:u64)->Vec<(u64,u64,u64)> {
 pub fn ass_file(p:&Project,c:&LayerClip)->Result<PathBuf> {
     let seg=p.segments.iter().find(|s|s.id==c.scene_id).context("Layer mất cảnh nguồn")?;
     let mut sub=p.clone();sub.composition=None;sub.segments=vec![seg.clone()];
+    if sub.output.layout.enabled {if let Some(video)=p.composition.as_ref().and_then(|comp|comp.clips.iter().find(|v|v.scene_id==c.scene_id&&v.track==timeline::VIDEO)) {
+        let t=&video.transform;sub.output.layout.left=t.x-t.width/2.;sub.output.layout.top=t.y-t.height/2.;sub.output.layout.width=t.width;sub.output.layout.height=t.height;
+    }}
     let key=crate::media::hash(serde_json::to_vec(&(&sub.segments,&sub.subtitles,visual_output(&sub))).unwrap_or_default());
     let dir=p.root.join("cache/layer-overlays").join(key);fs::create_dir_all(&dir)?;
-    let file=dir.join(if c.track==timeline::CAPTIONS {"captions.ass"} else {"graphics.ass"});
+    let file=dir.join(if crate::framed_layout::overlay(c){"layout.ass"}else if c.track==timeline::CAPTIONS {"captions.ass"} else {"graphics.ass"});
     if !file.is_file() {
-        crate::subtitle::write(&sub,&dir)?;crate::motion::write(&sub,&dir)?;
+        if crate::framed_layout::overlay(c){crate::framed_layout::write_overlay(&sub,seg,&file)?;}else{crate::subtitle::write(&sub,&dir)?;crate::motion::write(&sub,&dir)?;}
     }
     Ok(file)
 }
@@ -56,7 +60,7 @@ fn filter_path(path:&Path)->String {
 /// Input is seeked in source time; output PTS starts at zero.
 pub fn visual_input(p:&Project,c:&LayerClip,local:u64,w:u32,h:u32,fps:u32,proxy:bool)->Result<(Vec<String>,String)> {
     let start=c.source_at(local) as f64/1000.;
-    let pts=c.pts();
+    let pts=format!("{}{}",c.pts(),crate::source_masks::filters_at(p,c,local)?);
     let effects=crate::visual_effects::filters(p,c)?;
     if let Some(media)=&c.media {
         let file=if proxy {c.proxy.as_ref().filter(|p|p.is_file()).unwrap_or(media)} else {media};
@@ -118,7 +122,10 @@ pub fn export(p:&Project,s:&Settings,output:&Path,cancel:&Cancel)->Result<()> {
 }
 
 pub fn export_with_progress<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,mut progress:F)->Result<()> {
-    let mut prepared=p.clone();prepared.ensure_composition();let p=&prepared;
+    let mut prepared=p.clone();prepared.ensure_composition();
+    crate::source_masks::prepare(&mut prepared,s,cancel,|_|{})?;
+    if crate::source_masks::evidence_pending(&prepared) {crate::evidence::prepare(&mut prepared,s,cancel,|_|{})?;prepared.ensure_composition();}
+    let p=&prepared;
     let clock=Instant::now();
     let mut report=RenderReport{renderer:RENDERER,status:"running",..Default::default()};
     let result=export_inner(p,s,output,cancel,&mut progress,&mut report);
@@ -138,6 +145,7 @@ pub(crate) fn validate_export_inputs(p:&Project)->Result<()> {
     validate_assets_inner(p,true)
 }
 fn validate_assets_inner(p:&Project,repairable:bool)->Result<()> {
+    crate::framed_layout::check_file(p)?;
     let composition=p.composition_snapshot();composition.validate()?;
     crate::evidence::validate(p)?;
     p.music.validate()?;
@@ -157,6 +165,7 @@ fn repairable_background(p:&Project,c:&LayerClip)->bool {
 }
 
 fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,progress:&mut F,report:&mut RenderReport)->Result<()> {
+    crate::footage_first::prepare_contexts(p,s,cancel)?;
     crate::evidence::prepare_backgrounds(p,s,cancel).context("Không cập nhật được nền dẫn chứng từ nguồn đã tải; kiểm tra video nguồn rồi thử xuất lại")?;
     crate::background_music::prepare(p,s,cancel)?;
     p.card_sound.validate()?;
@@ -202,7 +211,7 @@ fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel
         let identities:Vec<_>=clips.iter().filter_map(|c|c.media.as_ref()).map(|path|{
             let m=fs::metadata(path).ok();(path,m.as_ref().map(|m|m.len()),m.and_then(|m|m.modified().ok()))
         }).collect();
-        let effects:Vec<_>=clips.iter().map(|c|crate::visual_effects::identity(p,c)).collect();
+        let effects:Vec<_>=clips.iter().map(|c|(crate::visual_effects::identity(p,c),crate::source_masks::clip_identity(p,c))).collect();
         let key=crate::media::hash(serde_json::to_vec(&(clips.clone(),scenes,identities,effects,visual_output(p),&p.subtitles,&s.encoder,frames,RENDERER)).unwrap_or_default());
         part.composition=Some(Composition{version:4,script_key:Composition::key(p),clips,removed:vec![]});
         let path=folder.join(format!("{key}.mp4"));
@@ -246,7 +255,7 @@ fn export_inner<F:FnMut(usize,usize)>(p:&Project,s:&Settings,output:&Path,cancel
 fn export_interval(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,end:u64,frames:u64,work:&Path)->Result<()> {
     let c=p.composition_snapshot();c.validate()?;
     let (w,h)=p.output.dimensions();let fps=p.output.fps;
-    let background=if p.output.editorial {"0xF4F0E6"}else{"0x0B1220"};
+    let background=if p.output.layout.enabled&&c.clips.iter().any(|c|c.track==timeline::VIDEO) {"black"}else if p.output.editorial {"0xF4F0E6"}else{"0x0B1220"};
     let mut args=vec!["-y".into(),"-v".into(),"error".into(),"-filter_complex_threads".into(),"1".into(),"-f".into(),"lavfi".into(),"-i".into(),format!("color=c={background}:s={w}x{h}:r={fps}:d={:.6}",end as f64/1000.)];
     let mut layers:Vec<_>=c.clips.iter().filter(|c|!c.audio()&&c.enabled(p)).collect();layers.sort_by_key(|c|c.z);
     let mut graph=vec!["[0:v]format=rgba[base0]".into()];let mut n=0;
@@ -274,7 +283,8 @@ fn export_interval(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,end:u64,fr
             };
             // Raster at the saved layer size, rather than enlarging every
             // small card/avatar to the canvas and immediately shrinking it.
-            (input,format!("{}{},scale={tw}:{th},setsar=1,fps={fps},format=rgba",clip.pts(),crate::visual_effects::filters(p,clip)?))
+            let filter=crate::framed_layout::raster(p,clip,tw,th,fps)?.unwrap_or(format!("{}{}{},scale={tw}:{th},setsar=1,fps={fps},format=rgba",clip.pts(),crate::source_masks::filters(p,clip)?,crate::visual_effects::filters(p,clip)?));
+            (input,filter)
         }else{
             // ASS must still be shaped at full output size; blurred video
             // backgrounds retain their original fill/crop/blur semantics.
@@ -301,14 +311,14 @@ fn export_interval(p:&Project,s:&Settings,output:&Path,cancel:&Cancel,end:u64,fr
         // starts small permanently crops the card to that initial rectangle.
         if t.rotation.abs()>0.001 {let angle=t.rotation.to_radians();transform.push_str(&format!(",rotate={angle}:ow=rotw({angle}):oh=roth({angle}):c=none"));}
         if clip.motion.zoom||clip.motion.kind=="stack_pop"||clip.motion.backdrop_ms.is_some() {let scale=clip.motion.scale_expression(clip.cue_in_ms);transform.push_str(&format!(",scale=w='iw*({scale})':h='ih*({scale})':eval=frame"));}
-        if clip.track==timeline::VIDEO {
+        if clip.track==timeline::VIDEO && !p.output.layout.enabled {
             if let Some(seg)=p.segments.iter().find(|s|s.id==clip.scene_id) {if seg.motion=="push_in" {
                 transform.push_str(&format!(",scale=w='iw*(1+0.05*min((t+{})/{},1))':h='ih*(1+0.05*min((t+{})/{},1))':eval=frame",clip.cue_in_ms as f64/1000.,seg.duration_ms as f64/1000.,clip.cue_in_ms as f64/1000.,seg.duration_ms as f64/1000.));
             }}
         }
         let start=clip.start_ms as f64/1000.;let stop=clip.end() as f64/1000.;
         graph.push(format!("[decoded{input_index}_{branch}]{filter},tpad=stop_mode=clone:stop_duration=2,trim=duration={:.6},{transform},setpts=PTS+{start:.6}/TB[layer{n}]",clip.duration_ms as f64/1000.));
-        let shake=if clip.track==timeline::VIDEO && p.segments.iter().any(|s|s.id==clip.scene_id&&s.motion=="reaction_shake") {
+        let shake=if clip.track==timeline::VIDEO && !p.output.layout.enabled && p.segments.iter().any(|s|s.id==clip.scene_id&&s.motion=="reaction_shake") {
             format!("+if(lt(t-{start}+{},0.45),5*sin(55*(t-{start}+{})),0)",clip.cue_in_ms as f64/1000.,clip.cue_in_ms as f64/1000.)
         }else{String::new()};
         let shift=clip.motion.shift_expression(clip.cue_in_ms);

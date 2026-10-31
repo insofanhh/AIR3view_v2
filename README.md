@@ -7,7 +7,7 @@
 - Đường dẫn giọng cũ chỉ được phục hồi khi tìm thấy bản có đúng nội dung/hash. Nếu không tìm thấy, chọn lại file trong **Giọng & nhân vật**. Tool kiểm tra trước khi tạo dự án con và dọn phần tạo dở khi tạo phiên thất bại.
 - Xóa dự án bị chặn nếu dự án khác hoặc thiết lập cũ vẫn dùng giọng/ảnh trong thư mục đó. Lưu lại thiết lập để pin vào kho chung, hoặc chuyển tài nguyên của dự án phụ thuộc trước khi xóa.
 
-Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.13. Preview, timeline và các layer nằm ngay trong app.
+Ứng dụng Windows native viết bằng Rust + egui, dùng FFmpeg để xử lý/xuất video. Phiên bản 0.2.14. Preview, timeline và các layer nằm ngay trong app.
 
 ## Âm thanh thẻ và ảnh dẫn chứng
 
@@ -23,7 +23,7 @@ Mở **Biên tập → SFX** ở đầu thanh timeline. **Thẻ thông tin / s�
 
 Trong **Thiết lập dự án → Kịch bản → Prompt & phong cách**, chọn **Dùng prompt True Crime / Bodycam** để áp dụng mẫu mới cho dự án đang mở. Dự án mới dùng mẫu này theo mặc định; chỉ preset mặc định cũ được tự chuyển, prompt tự viết được giữ lại. Chọn **English** ở Ngôn ngữ lời review nếu muốn lời, sub và thẻ thông tin bằng tiếng Anh.
 
-Mẫu dùng năm nhịp nội dung co giãn theo Độ dài, tôn trọng bật/tắt hook, số đoạn tiếng gốc và khoảng thời gian đã chọn; không cố định video vào mốc 70 giây. Ngân sách lời được tính từ thời lượng trừ clip gốc và kiểm tra trước TTS; WAV thật vẫn quyết định thời lượng cuối. Chỉ dẫn sân khấu phải tách khỏi narration. Khi nguồn không nêu bản án, kịch bản phải nói rõ chưa có kết quả. Đổi prompt không tự viết lại những cảnh đã có.
+Mẫu dùng năm nhịp nội dung co giãn theo Độ dài, tôn trọng bật/tắt hook, số đoạn tiếng gốc và khoảng thời gian đã chọn; không cố định video vào mốc 70 giây. Ngân sách lời được tính từ thời lượng trừ clip gốc và kiểm tra trước TTS; WAV thật vẫn quyết định thời lượng cuối. Chỉ dẫn sân khấu phải tách khỏi narration. Khi nguồn không nêu bản án, lời bình chỉ dùng hành động pháp lý đã được nguồn xác nhận; thông tin chưa rõ ở ghi chú nội bộ. Đổi prompt không tự viết lại những cảnh đã có.
 
 ### Gói thiết lập
 
@@ -40,6 +40,14 @@ Gói gồm prompt/quy tắc/thời lượng/ngôn ngữ, hook/cảnh xen kẽ, k
 Kết nối API/CLI, key, cookie, đường dẫn công cụ và ổ lưu giữ theo máy nhận. Font không đóng gói; cần cài font hoặc chọn font khác nếu máy nhận chưa có. Khi đổi ngôn ngữ/giọng/nhân vật/kiểu dẫn chứng, chạy lại bước tạo nội dung tương ứng; nhập preset không tự gọi AI hoặc xuất video. Khi dự án/hàng loạt đang xử lý, chờ hoặc tạm dừng trước khi nhập.
 
 Đọc/ghi/hash file chạy nền. Trước khi nhập, cấu hình cũ được sao lưu tại `preset-backups` trong thư mục dữ liệu app. Nếu lưu thất bại, app khôi phục JSON trước khi nhập. Mỗi tài nguyên tối đa 32 MB (ảnh), 64 MB (giọng mẫu), 256 MB (nhạc), 16 MB (LUT); tổng tối đa 512 MB.
+
+## Bố cục video trên / ảnh nền dưới
+
+Trong **Biên tập → Thiết lập dự án → Hình ảnh đầu ra → Video trên · Ảnh nền dưới**, bật bố cục rồi chọn **Giống video mẫu** hoặc **Ưu tiên tình huống**. Upload PNG/JPEG làm nền phía dưới; chưa upload thì nền đen. Ảnh được sao chép vào kho tài nguyên, ghi nhớ cho dự án sau và đóng gói trong file xuất thiết lập.
+
+Chỉnh lề/kích thước khung, crop từng cạnh để bỏ thông số camera, zoom và vùng nhìn X/Y. Trong **Layer → Video → Kéo nội dung**, kéo trực tiếp phần hình bên trong khung; chọn phạm vi **Dự án / Cùng nguồn / Riêng cảnh**. Crop phải giữ lại ít nhất 20% mỗi chiều và không tự nhận diện thông số camera; kiểm tra nội dung tình huống sau khi crop. Các cảnh footage ẩn avatar góc; cảnh Host giữ nhân vật và dẫn chứng. Có thể neo phụ đề theo khung, bật thanh tiêu đề và nhãn phần. Thay bố cục không cần tạo lại voice/avatar; MP4 đã xuất cần xuất lại để nhận thay đổi.
+
+**Crop video ở mọi bố cục:** Chọn clip ở track **Video**, vào **Cảnh → Crop video · 4 cạnh**. Chỉnh **Trái / Phải / Trên / Dưới** theo % kích thước nguồn, hoặc nhập % trực tiếp. Mặc định chỉnh **Riêng cảnh**; chọn **Cùng nguồn / Toàn dự án** khi cần. Hình giữ tỉ lệ, tự lấp đầy khung hiện tại; có **Đặt lại 4 cạnh** và **Zoom & vùng nhìn**. Crop riêng cảnh/nguồn được ưu tiên hơn mặc định toàn dự án; có thể bỏ ghi đè để dùng mặc định. Cảnh/layer khóa được giữ nguyên. Preview cập nhật trực tiếp, không tạo lại giọng và không đổi thời gian. Crop toàn dự án được nhớ trong thiết lập cho dự án sau; dự án cũ không tự đổi hình khi chưa chỉnh crop.
 
 ## Khởi chạy
 
@@ -120,7 +128,7 @@ Bản đồ tốc độ, trạng thái mốc và thiết lập được lưu tro
 
 ## Dịch vụ
 
-- AI: Antigravity CLI hỗ trợ JSON hoặc Gemini API qua biến môi trường `GEMINI_API_KEY`. Phân tích URL có thể chạy song song với tải; tùy khả năng provider, app chuyển sang transcript + ảnh sau tải.
+- AI: Antigravity CLI hỗ trợ JSON hoặc Gemini API qua biến môi trường `GEMINI_API_KEY`. Luồng cố định: tải nguồn → transcript Whisper + ảnh timestamp → AI trích sự kiện → AI viết lời từ bảng sự kiện → voice/timeline. Không gửi URL cho AI trong lúc tải. Cả hai provider đều dùng ảnh local; bước viết chỉ dùng text.
 - Giọng: VieNeu tại `http://127.0.0.1:8765`, model `pnnbao-ump/VieNeu-TTS-v3-Turbo`, có preset và audio tham chiếu. Kịch bản hỗ trợ Tiếng Việt/English; cấu hình giọng cần phù hợp với ngôn ngữ và runtime.
 - Nhân vật: 2D local dùng Rhubarb + Pillow hoặc HeyGen Avatar IV qua `HEYGEN_API_KEY`. Nhánh HeyGen đã có kiểm thử hợp đồng bằng giả lập; cần key/số dư để kiểm tra dịch vụ thực tế.
 - YouTube: chọn cookie Netscape `.txt` trong Cài đặt kết nối khi nguồn yêu cầu đăng nhập. Cookie phải còn hiệu lực và tài khoản có quyền xem; chỉ truyền khi tải, không gửi cho AI.
@@ -247,7 +255,7 @@ Khi clone source: chạy `scripts/setup-tools.ps1` để tải đúng phiên b�
 
 ### Preset US Bodycam / True Crime
 
-Trong **Biên tập video → Thiết lập dự án → Kịch bản → Prompt & phong cách**, bấm **Dùng prompt True Crime / Bodycam** để chọn English, bộ kiểm tra US v1 và chế độ xen tiếng gốc tự căn nhịp. Có thể đổi lại ngôn ngữ hoặc chọn số đoạn cố định; thời lượng luôn lấy từ Độ dài. Nút preset không tự viết lại timeline đang có.
+Trong **Biên tập video → Thiết lập dự án → Kịch bản → Prompt & phong cách**, bấm **Dùng prompt True Crime / Bodycam** để chọn English, phong cách US và chế độ xen tiếng gốc tự căn nhịp. Có thể đổi lại ngôn ngữ hoặc chọn số đoạn cố định; thời lượng luôn lấy từ Độ dài. Nút preset không tự viết lại timeline đang có.
 
 - Ba rule lời đọc dùng chung cho prompt, sửa cục bộ và đối chiếu: kể trực tiếp sự kiện, setup tiến tới hành động mới sau hook, tránh lặp thừa nhưng cho phép ngữ pháp tự nhiên/trích dẫn/tên tội danh. Tự rà trong cùng phản hồi; lặp nhỏ chỉ là lưu ý local, không thêm lượt AI bắt buộc hay thay đổi cấu hình xuất MP4. Thời gian tổng vẫn phụ thuộc nhà cung cấp và số lỗi dữ kiện thực tế.
 - Năm nhịp nội dung co giãn theo thời lượng. Câu lời bình ngắn, số trong TTS viết bằng chữ; card tối đa 25 ký tự mỗi dòng, giữ nguyên nghĩa và nguồn trích dẫn.
@@ -271,6 +279,7 @@ studio-cli batch-action <batch-id> <action-json>
 studio-cli prepare <project.json>
 studio-cli script-only|speech|assets|captions|evidence <project.json>
 studio-cli repair-script <project.json> <saved response>
+studio-cli inspect-script <project.json> [candidate.json]
 studio-cli render <project.json> <output.mp4>
 studio-cli metadata-inspect <input.mp4>
 studio-cli metadata-apply <project.json> <input.mp4> <new-output.mp4>
@@ -280,3 +289,25 @@ studio-cli heygen-preflight
 `batch-create` có thư mục output thì tự xuất MP4; không có thì dừng ở timeline sẵn sàng biên tập. `action-json` có dạng `{"action":"pause"}`, `{"action":"stop"}`, `{"action":"retry_all"}`, hoặc `{"action":"retry","item_id":"<ID>"}`; các thao tác `skip` và `up` cũng dùng `item_id`.
 
 Xem `THIRD_PARTY_NOTICES.md`, `WHATLANG-LICENSE.txt` và giấy phép trong `tools/` trước khi phân phối.
+
+### Tạo review khi không dùng nhân vật
+
+- Tắt **Tạo nhân vật review / reaction** để tạo một Host mở đầu ngắn (mục tiêu 5–8 giây, tối đa 10 giây lời thực). Các cảnh lời sau dùng highlight từ nguồn, gồm cả phần phân tích và câu hỏi kết.
+- Hook, tiếng gốc xen kẽ, tốc độ footage, ngôn ngữ, Độ dài và cảnh đã khóa vẫn theo thiết lập. Voice AI luôn giữ tốc độ gốc. Dự án cũ không tự đổi cảnh khi mở; chế độ áp dụng khi tạo lại kịch bản.
+- Động tác/biểu cảm avatar không làm phát sinh lượt sửa AI, kể cả khi nhân vật bật. AI không chọn hoặc kiểm tra cảm xúc. Nhân vật 2D nhép miệng theo Rhubarb/audio; cử chỉ tay dùng logic cục bộ hoặc tùy chỉnh trong biên tập. Dữ kiện, lời dẫn, timestamp và hiệu ứng hình thực sự hiển thị vẫn được kiểm tra.
+- Đoạn preset cũ `SOURCE AND AVATAR SYNC` tự được bỏ khi đọc thiết lập/dự án. Dự án cũ có trường `emotion` vẫn mở được; trường này không tham gia tạo kịch bản hoặc render mới.
+- `analysis_summary` là tóm tắt nội bộ cho người biên tập, có thể bằng tiếng Việt khi video dùng English. Ngôn ngữ của tóm tắt không chặn tạo video và không làm phát sinh lượt dịch/sửa AI. Lời đọc, phụ đề, tiêu đề và chữ trên thẻ vẫn theo ngôn ngữ đã chọn; trích dẫn nguồn và cảnh khóa được giữ nguyên.
+- Lượt sửa hỗ trợ metadata riêng (`title`, `analysis_summary`, `edits: []`). Tool kiểm tra trường có thể sửa trước khi chọn schema, dừng lượt gọi lặp nếu nội dung còn lỗi không thay đổi. Dự án cũ chỉ bị chặn bởi ngôn ngữ tóm tắt được kiểm tra lại từ candidate đã lưu, rồi đối chiếu nguồn trước khi tiếp tục.
+- `inspect-script` chỉ kiểm tra cục bộ, không gọi AI và không sửa dự án. Kết quả JSON có `local_only: true`; kết quả này không thay thế đối chiếu dữ kiện nguồn.
+- Với luồng đối chiếu của dự án cũ, nếu CLI quá hạn, app thử lại một lần bằng tập ảnh trọng tâm nhỏ hơn trong ngân sách tối đa 360 giây. Luồng tạo kịch bản mới bên dưới không chạy bước đối chiếu này.
+
+
+### Luồng kịch bản theo sự kiện nguồn
+
+Kịch bản tạo mới dùng `grounded-script-v1`. Nguồn phải tải xong trước khi AI chạy. Whisper/ảnh có timestamp được cache; AI trích một bảng sự kiện, đoạn tiếng gốc và ảnh tham chiếu. AI viết lời ở lượt thứ hai chỉ nhận text. Tool giải mã event ID thành source ID/mốc nguồn rồi căn timeline theo WAV thật. Không dùng giờ trên overlay camera hoặc tham số YouTube t= làm thời gian cắt.
+
+Bảng sự kiện và kịch bản có cache riêng trong `analysis/grounded`. Thay prompt/Độ dài có thể dùng lại bảng sự kiện nếu nguồn/vùng chọn không đổi. Lưu ý về câu dài, cliché, mở đầu/kết bài và nhịp US không chặn dự án. JSON, nguồn, vùng cấm, cảnh khóa, ngôn ngữ và thời lượng vẫn được kiểm tra. Tối đa một lượt sửa kỹ thuật tự động dùng chung cho kịch bản và WAV; các lời gọi AI chia sẻ ngân sách tối đa 600 giây (hoặc timeout đã đặt nếu ngắn hơn). Ngân sách này không bao gồm tải/ASR/TTS/render. Nút Thử lại mở một lượt có giới hạn từ kết quả đã lưu.
+
+Ảnh trung tính từ sự kiện đã chọn được kiểm tra mốc/file/độ rõ local; UI ghi rõ “Ảnh theo sự kiện nguồn · kiểm tra local”, không tuyên bố đối chiếu AI độc lập. Chỉnh nhãn nhận diện/claim hoặc yêu cầu kiểm tra lại ảnh vẫn dùng bộ chọn ảnh riêng. Người biên tập cần rà lại dữ kiện nhạy cảm và các đoạn hành động nhanh: ASR, ảnh lấy mẫu và AI đều có thể sai.
+
+Mở dự án cũ giữ nguyên timeline, giọng, ảnh và các lựa chọn đã lưu. Tạo lại kịch bản mới áp dụng luồng mới; không có bước đối chiếu toàn bộ kịch bản US bắt buộc sau mỗi lần sửa.
